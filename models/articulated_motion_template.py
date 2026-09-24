@@ -90,6 +90,7 @@ class ArticulatedMotionTemplate:
     frame_count: int = 4
     samples_used: int = 0
     outliers_detected: int = 0
+    status: str = "active"  # "active" o "review_required"
     frames: List[ArticulatedFrameTemplate] = field(default_factory=list)
 
     def __post_init__(self):
@@ -108,6 +109,7 @@ class ArticulatedMotionTemplate:
             "frame_count": self.frame_count,
             "samples_used": self.samples_used,
             "outliers_detected": self.outliers_detected,
+            "status": self.status,
             "frames": [f.to_dict() for f in self.frames],
         }
 
@@ -120,5 +122,6 @@ class ArticulatedMotionTemplate:
             frame_count=int(data.get("frame_count", 4)),
             samples_used=int(data.get("samples_used", 0)),
             outliers_detected=int(data.get("outliers_detected", 0)),
+            status=data.get("status", "active"),
             frames=frames,
         )

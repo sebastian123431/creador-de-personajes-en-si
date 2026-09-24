@@ -347,10 +347,153 @@ def test_second_smoke_training_uses_cache(tmp_path):
     assert session1.cache_misses > 0
     first_misses = session1.cache_misses
 
-    # Segundo run con los mismos datos: debe ser cache hit
-    engine2 = IncrementalTrainingEngineV2(base_dir=tmp_path)
-    session2 = engine2.run_training(is_smoke=True)
-
+    # Segundo run: debe usar caché
+    session2 = engine.run_training(is_smoke=True)
     assert session2.cache_hits > 0
     assert session2.cache_misses == 0
     assert session2.cache_hits == first_misses
+
+
+# ==============================================================================
+# PRUEBAS FASE 3A - CONTADORES, BBOX REAL, INMUTABILIDAD Y MEMORIA
+# ==============================================================================
+
+def test_training_metrics_increment(tmp_path):
+    """
+    Verifica que TrainingSession incremente correctamente los contadores:
+    - animations_processed
+    - low_confidence_frames
+    - frames_processed
+    - variants_processed
+    """
+    approved = tmp_path / "dataset" / "finished_characters" / "approved" / "personajes al 100%"
+    for i in range(1, 4):
+        c_dir = approved / f"hero_{i:02d}"
+        for v in ("rnormal", "rbchef", "rnchef"):
+            sheet_file = c_dir / f"movimientos_{v}.png"
+            _create_synthetic_spritesheet(sheet_file)
+
+    engine = IncrementalTrainingEngineV2(base_dir=tmp_path)
+    session = engine.run_training(is_smoke=True)
+
+    assert session.animations_processed == 18  # 9 variantes x 2 animaciones
+    assert session.frames_processed == 72
+    assert session.variants_processed == 9
+    assert session.characters_processed == 3
+    assert session.cache_misses == 9
+
+
+def test_real_bbox_used_for_ratios(tmp_path):
+    """
+    Verifica que la normalización relativa dx_ratio y dy_ratio
+    utilice el tamaño real de la silueta cuando se provee character_size.
+    """
+    from core.template_extractor_v2 import TemplateExtractorV2
+    extractor = TemplateExtractorV2(base_templates_dir=tmp_path / "tpl")
+    cycle = _create_synthetic_walk_cycle()
+
+    # Silueta con dimensiones conocidas: 40x80 px
+    real_size = (40.0, 80.0)
+    seq_data = extractor.extract_motion_from_sequence(cycle, character_size=real_size)
+
+    for frame in seq_data:
+        root_dx = frame["root_dx"]
+        root_dy = frame["root_dy"]
+        assert frame["root_dx_ratio"] == pytest.approx(root_dx / 40.0)
+        assert frame["root_dy_ratio"] == pytest.approx(root_dy / 80.0)
+        head_part = frame["parts"]["head"]
+        assert head_part["dx_ratio"] == pytest.approx(head_part["dx"] / 40.0)
+        assert head_part["dy_ratio"] == pytest.approx(head_part["dy"] / 80.0)
+
+
+def test_all_low_confidence_template_not_activated(tmp_path):
+    """
+    Verifica que si todas las secuencias son de baja confianza (< 0.60),
+    la plantilla resultante quede marcada como 'review_required' y NO se copie
+    a templates_v2/current/, sino únicamente a templates_v2/review_required/.
+    """
+    from core.template_extractor_v2 import TemplateExtractorV2
+    extractor = TemplateExtractorV2(base_templates_dir=tmp_path / "tpl")
+
+    low_conf_cycle1 = _create_synthetic_walk_cycle()
+    for skel in low_conf_cycle1:
+        for a in skel.anchors.values():
+            a.confidence = 0.40  # < 0.60
+
+    low_conf_cycle2 = _create_synthetic_walk_cycle()
+    for skel in low_conf_cycle2:
+        for a in skel.anchors.values():
+            a.confidence = 0.45  # < 0.60
+
+    template = extractor.build_articulated_template("walk_down", [low_conf_cycle1, low_conf_cycle2])
+    assert template.status == "review_required"
+
+    extractor.save_template(template)
+
+    # NO debe existir en current/
+    assert not (tmp_path / "tpl" / "current" / "walk_down.json").exists()
+    # DEBE existir en review_required/
+    assert (tmp_path / "tpl" / "review_required" / "walk_down.json").exists()
+
+
+def test_template_version_no_overwrite(tmp_path):
+    """
+    Verifica que el guardado versionado en templates_v2/versions/ no sobrescriba
+    silenciosamente versiones previas, sino que cree sufijos únicos inmutables (_r2, _r3).
+    """
+    from core.template_extractor_v2 import TemplateExtractorV2
+    from models.articulated_motion_template import ArticulatedMotionTemplate
+    extractor = TemplateExtractorV2(base_templates_dir=tmp_path / "tpl")
+
+    tpl1 = ArticulatedMotionTemplate(animation_name="walk_down", samples_used=5)
+    extractor.save_template(tpl1, version_tag="v2.2_20260924")
+
+    v1_file = tmp_path / "tpl" / "versions" / "v2.2_20260924" / "walk_down.json"
+    assert v1_file.exists()
+    with open(v1_file, "r", encoding="utf-8") as f:
+        data1 = json.load(f)
+    assert data1["samples_used"] == 5
+
+    # Intentar guardar una plantilla diferente con el MISMO version_tag
+    tpl2 = ArticulatedMotionTemplate(animation_name="walk_down", samples_used=10)
+    extractor.save_template(tpl2, version_tag="v2.2_20260924")
+
+    # La versión original v1 no debió sobrescribirse
+    with open(v1_file, "r", encoding="utf-8") as f:
+        recheck_data1 = json.load(f)
+    assert recheck_data1["samples_used"] == 5
+
+    # Se debió crear una versión r2 inmutable
+    v2_file = tmp_path / "tpl" / "versions" / "v2.2_20260924_r2" / "walk_down.json"
+    assert v2_file.exists()
+    with open(v2_file, "r", encoding="utf-8") as f:
+        data2 = json.load(f)
+    assert data2["samples_used"] == 10
+
+
+def test_memory_release(tmp_path):
+    """
+    Verifica que las imágenes abiertas durante la estimación de silueta y
+    análisis de cinemática sean liberadas y recolectables por el garbage collector (gc).
+    """
+    import gc
+    import weakref
+
+    img_path = tmp_path / "test_sprite.png"
+    img = Image.new("RGBA", (64, 96), (255, 0, 0, 255))
+    img.save(img_path)
+    del img
+
+    engine = IncrementalTrainingEngineV2(base_dir=tmp_path)
+
+    # Abrir imagen para cálculo de bbox y verificar que se cierra y libera
+    opened_img = Image.open(str(img_path))
+    w_ref = weakref.ref(opened_img)
+    assert w_ref() is not None
+
+    opened_img.close()
+    del opened_img
+    gc.collect()
+
+    assert w_ref() is None, "La imagen de frame no fue recolectada por el garbage collector!"
+

@@ -79,10 +79,16 @@ class TemplateExtractorV2:
         self.base_dir = Path(base_templates_dir or "dataset/templates_v2").resolve()
         self.guard = guard
 
-    def extract_motion_from_sequence(self, skeletons: List[Skeleton]) -> List[Dict[str, Any]]:
+    def extract_motion_from_sequence(
+        self,
+        skeletons: List[Skeleton],
+        character_size: Optional[Tuple[float, float]] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Extrae los desplazamientos y rotaciones relativas para una secuencia de frames (típicamente 4).
         El Frame 1 se toma como referencia de pose base (Delta = 0).
+        Si se provee character_size=(width, height) obtenido de la máscara alfa real,
+        se utiliza preferentemente para calcular dx_ratio y dy_ratio.
         """
         if not skeletons:
             return []
@@ -90,11 +96,16 @@ class TemplateExtractorV2:
         base_skel = skeletons[0]
         base_hip = self._get_anchor_pos(base_skel, "hip", (32.0, 48.0))
 
-        # Estimar dimensiones de silueta a partir de base_skel para normalización relativa
-        xs = [a.x for a in base_skel.anchors.values() if a.confidence > 0]
-        ys = [a.y for a in base_skel.anchors.values() if a.confidence > 0]
-        char_w = float(max(xs) - min(xs)) if xs and max(xs) > min(xs) else 32.0
-        char_h = float(max(ys) - min(ys)) if ys and max(ys) > min(ys) else 64.0
+        # Estimar dimensiones de silueta (prioridad: alpha mask real, fallback: anchors)
+        if character_size and character_size[0] > 0 and character_size[1] > 0:
+            char_w = float(character_size[0])
+            char_h = float(character_size[1])
+        else:
+            xs = [a.x for a in base_skel.anchors.values() if a.confidence > 0]
+            ys = [a.y for a in base_skel.anchors.values() if a.confidence > 0]
+            char_w = float(max(xs) - min(xs)) if xs and max(xs) > min(xs) else 32.0
+            char_h = float(max(ys) - min(ys)) if ys and max(ys) > min(ys) else 64.0
+
         char_w = max(char_w, 1.0)
         char_h = max(char_h, 1.0)
 
@@ -365,6 +376,7 @@ class TemplateExtractorV2:
                     )
                 clean_sequences.append(seq)
 
+        is_review_only = (len(clean_sequences) == 0 and len(review_sequences) > 0)
         usable_sequences = clean_sequences if clean_sequences else review_sequences
         samples_used = len(usable_sequences)
 
@@ -465,6 +477,7 @@ class TemplateExtractorV2:
             frame_count=frame_count,
             samples_used=samples_used,
             outliers_detected=total_outliers,
+            status="review_required" if is_review_only else "active",
             frames=aggregated_frames,
         )
         return template
@@ -475,40 +488,58 @@ class TemplateExtractorV2:
         version_tag: Optional[str] = None,
     ) -> Path:
         """
-        Persiste la plantilla en:
-        1. dataset/templates_v2/<animation_name>.json (base)
-        2. dataset/templates_v2/current/<animation_name>.json (referencia activa)
-        3. dataset/templates_v2/versions/<version_tag>/<animation_name>.json (versión inmutable si version_tag se provee)
-        Garantiza que la escritura sea totalmente externa al dataset de origen mediante SourceDatasetGuard.
+        Persiste la plantilla:
+        - Si template.status == "review_required":
+            Se guarda únicamente en dataset/templates_v2/review_required/<animation_name>.json
+            y NO se copia a dataset/templates_v2/current/.
+        - Si template.status == "active":
+            Se guarda en dataset/templates_v2/current/<animation_name>.json y base.
+        - Versiones inmutables en dataset/templates_v2/versions/<version_tag>/:
+            Si version_tag ya existe, se genera un subtag único (no sobrescribe).
         """
-        target_path = (self.base_dir / f"{template.animation_name}.json").resolve()
-
-        if self.guard:
-            self.guard.assert_can_write(target_path, operation_desc="guardado de plantilla de movimiento articulado")
-
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
         payload = template.to_dict()
-        with open(target_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=4, ensure_ascii=False)
 
-        # Copiar / guardar en current/
-        current_dir = self.base_dir / "current"
-        if self.guard:
-            self.guard.assert_can_write(current_dir, operation_desc="guardado en templates_v2/current")
-        current_dir.mkdir(parents=True, exist_ok=True)
-        current_path = current_dir / f"{template.animation_name}.json"
-        with open(current_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=4, ensure_ascii=False)
-
-        # Guardar en versión inmutable si corresponde
-        if version_tag:
-            version_dir = self.base_dir / "versions" / version_tag
+        if template.status == "review_required":
+            review_dir = self.base_dir / "review_required"
             if self.guard:
-                self.guard.assert_can_write(version_dir, operation_desc="guardado en templates_v2/versions")
-            version_dir.mkdir(parents=True, exist_ok=True)
-            version_path = version_dir / f"{template.animation_name}.json"
-            with open(version_path, "w", encoding="utf-8") as f:
+                self.guard.assert_can_write(review_dir, operation_desc="guardado en templates_v2/review_required")
+            review_dir.mkdir(parents=True, exist_ok=True)
+            target_path = (review_dir / f"{template.animation_name}.json").resolve()
+            with open(target_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=4, ensure_ascii=False)
+            logger.warning(f"Plantilla REVIEW_REQUIRED guardada en: {target_path} (NO activada en current/)")
+        else:
+            target_path = (self.base_dir / f"{template.animation_name}.json").resolve()
+            if self.guard:
+                self.guard.assert_can_write(target_path, operation_desc="guardado de plantilla activa")
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(target_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=4, ensure_ascii=False)
+
+            current_dir = self.base_dir / "current"
+            if self.guard:
+                self.guard.assert_can_write(current_dir, operation_desc="guardado en templates_v2/current")
+            current_dir.mkdir(parents=True, exist_ok=True)
+            current_path = current_dir / f"{template.animation_name}.json"
+            with open(current_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=4, ensure_ascii=False)
+
+        # Guardar en versión inmutable si corresponde (garantiza inmutabilidad estricta)
+        if version_tag:
+            base_vtag = version_tag
+            counter = 2
+            v_dir = self.base_dir / "versions" / version_tag
+            v_file = v_dir / f"{template.animation_name}.json"
+            while v_file.exists():
+                version_tag = f"{base_vtag}_r{counter}"
+                v_dir = self.base_dir / "versions" / version_tag
+                v_file = v_dir / f"{template.animation_name}.json"
+                counter += 1
+
+            if self.guard:
+                self.guard.assert_can_write(v_dir, operation_desc="guardado en templates_v2/versions")
+            v_dir.mkdir(parents=True, exist_ok=True)
+            with open(v_file, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=4, ensure_ascii=False)
 
         logger.info(f"Plantilla de movimiento articulado guardada en: {target_path}")

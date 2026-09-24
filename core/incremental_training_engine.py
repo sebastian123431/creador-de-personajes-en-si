@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import numpy as np
 from PIL import Image
 
 from core.anchor_tracker import AnchorTracker
@@ -302,6 +303,9 @@ class IncrementalTrainingEngineV2:
                                 skel_seq = self._reconstruct_skeletons_from_descriptor(descriptor)
                                 if skel_seq and len(skel_seq) == 4:
                                     aggregated_animation_skeletons[anim_name].append(skel_seq)
+                                session.animations_processed += 1
+                                if descriptor.review_required:
+                                    session.review_required_count += 1
                     else:
                         # --- CACHE MISS ---
                         session.cache_misses += 1
@@ -339,24 +343,36 @@ class IncrementalTrainingEngineV2:
 
                             frame_paths = [f.image_path for f in anim_obj.frames[:4]]
 
+                            # Calcular dimensiones reales de la silueta a partir de la máscara alfa
+                            char_w, char_h = self._compute_sprite_bbox(frame_paths[0])
+
                             # Memory safety: analizar frames y liberar imágenes
                             skeletons = self.anchor_tracker.track_animation_anchors(
                                 frame_paths, orientation=anim_name
                             )
 
                             if len(skeletons) == 4:
+                                min_anchor_conf = float(self.config.get("min_anchor_confidence", 0.60))
+
+                                # Contar frames individuales de baja confianza
+                                for skel in skeletons:
+                                    if skel.average_confidence < min_anchor_conf:
+                                        session.low_confidence_frames += 1
+
                                 # Comprobar confianza del ciclo
                                 avg_conf = sum(s.average_confidence for s in skeletons) / 4.0
-                                review_req = avg_conf < float(self.config.get("min_anchor_confidence", 0.60))
+                                review_req = avg_conf < min_anchor_conf
 
                                 if review_req:
                                     session.review_required_count += 1
                                     variant_has_low_confidence = True
 
-                                # Extraer cinemática para MotionDescriptor
-                                motion_seq_data = self.template_extractor.extract_motion_from_sequence(skeletons)
+                                # Extraer cinemática para MotionDescriptor usando dimensiones reales
+                                motion_seq_data = self.template_extractor.extract_motion_from_sequence(
+                                    skeletons, character_size=(char_w, char_h)
+                                )
 
-                                # Crear MotionDescriptor
+                                # Crear MotionDescriptor con dimensiones de silueta real
                                 desc = self._build_motion_descriptor(
                                     character_id=char_id,
                                     variant=vname,
@@ -369,6 +385,7 @@ class IncrementalTrainingEngineV2:
                                     review_required=review_req,
                                     pose_version=pose_version,
                                     template_version=tpl_version,
+                                    character_size=(char_w, char_h),
                                 )
 
                                 # Guardar descriptor en disco
@@ -384,6 +401,7 @@ class IncrementalTrainingEngineV2:
 
                                 aggregated_animation_skeletons[anim_name].append(skeletons)
                                 session.frames_processed += 4
+                                session.animations_processed += 1
 
                         # Actualizar estado de la entrada en el manifiesto
                         manifest_entry.spritesheet_sha256 = sheet_sha256
@@ -464,6 +482,21 @@ class IncrementalTrainingEngineV2:
 
         return session
 
+    def _compute_sprite_bbox(self, img_path: Path) -> Tuple[float, float]:
+        """Calcula el ancho y alto real a partir de la máscara alfa (> 0)."""
+        try:
+            with Image.open(str(img_path)) as img:
+                arr = np.array(img.convert("RGBA"))
+            alpha = arr[:, :, 3]
+            ys, xs = np.where(alpha > 0)
+            if len(xs) > 0 and len(ys) > 0:
+                w = float(np.max(xs) - np.min(xs) + 1)
+                h = float(np.max(ys) - np.min(ys) + 1)
+                return max(w, 1.0), max(h, 1.0)
+        except Exception as e:
+            logger.warning(f"Error calculando sprite bbox para {img_path}: {e}")
+        return 32.0, 64.0
+
     def _build_motion_descriptor(
         self,
         character_id: str,
@@ -477,6 +510,7 @@ class IncrementalTrainingEngineV2:
         review_required: bool,
         pose_version: str,
         template_version: str,
+        character_size: Optional[Tuple[float, float]] = None,
     ) -> MotionDescriptor:
         """Construye un MotionDescriptor libre de imágenes a partir del análisis cinemático."""
         root_motion = []
@@ -509,12 +543,19 @@ class IncrementalTrainingEngineV2:
             translations_ratio.append(ratio_dict)
             angles_list.append(ang_dict)
 
-        # Estimar dimensiones de silueta
-        base_skel = skeletons[0]
-        xs = [a.x for a in base_skel.anchors.values() if a.confidence > 0]
-        ys = [a.y for a in base_skel.anchors.values() if a.confidence > 0]
-        char_w = float(max(xs) - min(xs)) if xs and max(xs) > min(xs) else 32.0
-        char_h = float(max(ys) - min(ys)) if ys and max(ys) > min(ys) else 64.0
+        # Dimensiones de silueta: prioridad máscara alfa real, fallback anchors
+        if character_size and character_size[0] > 0 and character_size[1] > 0:
+            char_w = float(character_size[0])
+            char_h = float(character_size[1])
+        else:
+            base_skel = skeletons[0]
+            xs = [a.x for a in base_skel.anchors.values() if a.confidence > 0]
+            ys = [a.y for a in base_skel.anchors.values() if a.confidence > 0]
+            char_w = float(max(xs) - min(xs)) if xs and max(xs) > min(xs) else 32.0
+            char_h = float(max(ys) - min(ys)) if ys and max(ys) > min(ys) else 64.0
+
+        char_w = max(char_w, 1.0)
+        char_h = max(char_h, 1.0)
 
         return MotionDescriptor(
             character_id=character_id,
