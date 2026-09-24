@@ -1,7 +1,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import numpy as np
 from PIL import Image
 
@@ -43,11 +43,12 @@ class FrameExtractor:
     def __init__(
         self,
         output_base_dir: Optional[Path] = None,
-        detector: Optional[SheetDetector] = None,
-        guard: Optional[SourceDatasetGuard] = None
+        detector: Optional[Any] = None,
+        guard: Optional[SourceDatasetGuard] = None,
+        sheet_detector: Optional[Any] = None,
     ):
         self.output_base_dir = Path(output_base_dir or "dataset/extracted_frames").resolve()
-        self.detector = detector or SheetDetector()
+        self.detector = sheet_detector or detector or SheetDetector()
         self.guard = guard
 
     def extract_from_sheet(

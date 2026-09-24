@@ -22,7 +22,7 @@
    - Aprendizaje de desplazamientos $(\Delta x, \Delta y)$ y rotaciones $(\Delta \theta)$ por articulación y paso de tiempo.
    - Filtrado robusto de anomalías estadísticas mediante Desviación Absoluta de la Mediana (*Median Absolute Deviation*).
 6. **Transferencia Articulada V2 (`[ 🚀 GENERATE V2 ]`):**
-   - **`HeadIdentityLock`:** La cabeza y rostro original se conservan 100% bit-exactos, trasladándose sin ninguna deformación ni regeneración artificial.
+   - **`HeadIdentityLock`:** Máxima preservación de identidad visual. La cabeza y rostro original se trasladan con precisión geométrica sin deformación ni aberraciones.
    - **`pixel_rotate`:** Rotación *Nearest-Neighbor* que preserva el pivote en el lienzo sin difuminados ni anti-aliasing borroso.
    - **`PaletteGuard`:** Saneamiento cromático para asegurar que ningún color ajeno a la paleta entre al sprite final.
 7. **Detección Avanzada de Spritesheets V2:**
@@ -171,7 +171,7 @@ python app.py
 ### 4. Generar Animaciones V2 (`GENERATE V2`)
 - Selecciona el personaje de destino.
 - Presiona el botón verde **`[ 🚀 GENERATE V2 ]`**.
-- El motor segmentará las 6 partes corporales, aplicará las rotaciones sin desenfoque (`pixel_rotate`), mantendrá la cabeza 100% idéntica (`HeadIdentityLock`) y verificará la paleta de colores (`PaletteGuard`).
+- El motor segmentará las partes corporales, aplicará rotaciones articulares sin desenfoque (`pixel_rotate`), activará `HeadIdentityLock` para la máxima preservación de identidad visual y verificará la paleta de colores (`PaletteGuard`).
 
 ### 5. Comparar Versiones (`COMPARAR V1 vs V2`)
 - Presiona **`[ ⚖️ COMPARAR V1 vs V2 ]`**.

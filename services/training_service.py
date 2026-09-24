@@ -202,7 +202,11 @@ class ArticulatedTrainingWorker(QObject):
             guard=self.dataset_service.guard
         )
         self.sheet_detector = SheetDetectorV2(guard=self.dataset_service.guard)
-        self.frame_extractor = FrameExtractor(output_base_dir=self.base_dir / "dataset" / "extracted_frames")
+        self.frame_extractor = FrameExtractor(
+            output_base_dir=self.base_dir / "dataset" / "extracted_frames",
+            sheet_detector=self.sheet_detector,
+            guard=self.dataset_service.guard
+        )
 
     def run_training(self):
         report = ArticulatedTrainingReport()

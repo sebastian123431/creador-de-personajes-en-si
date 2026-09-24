@@ -9,6 +9,7 @@ from core.template_library import TemplateLibrary
 from models.animation import Animation
 from models.character import Character
 from models.character_variant import CharacterVariant
+from models.frame import Frame
 
 logger = logging.getLogger("SpriteStudio.AnimationService")
 
@@ -80,7 +81,7 @@ class AnimationService:
         """
         Genera los 64 frames (16 animaciones x 4 frames) utilizando el motor articulado V2:
         - 18 anclajes anatómicos
-        - HeadIdentityLock (cabeza 100% bit-exacta)
+        - HeadIdentityLock (máxima preservación de identidad visual)
         - pixel_rotate sin difuminado
         - PaletteGuard (garantía de integridad cromática)
         """

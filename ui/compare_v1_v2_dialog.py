@@ -92,7 +92,7 @@ class CompareV1V2Dialog(QDialog):
         v2_box_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.canvas_v2 = PixelArtCanvas()
         self.canvas_v2.setFixedSize(260, 260)
-        self.v2_status = QLabel("V2 Status: 100% Identidad Facial + Palette Guard")
+        self.v2_status = QLabel("V2 Status: Máxima Preservación de Identidad + Palette Guard")
         self.v2_status.setStyleSheet("color: #38bdf8; font-weight: bold;")
         self.v2_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v2_box_l.addWidget(self.canvas_v2)
@@ -106,7 +106,7 @@ class CompareV1V2Dialog(QDialog):
         metrics_box.setStyleSheet("background: #0f172a; border-radius: 6px; padding: 8px;")
         m_layout = QHBoxLayout(metrics_box)
 
-        m_layout.addWidget(QLabel("<b>HeadIdentityLock:</b> <font color='#22c55e'>100% Bit-Exacto</font>"))
+        m_layout.addWidget(QLabel("<b>HeadIdentityLock:</b> <font color='#22c55e'>Activo (Preservación)</font>"))
         m_layout.addWidget(QLabel("<b>PaletteGuard:</b> <font color='#22c55e'>0 Colores Inválidos</font>"))
         m_layout.addWidget(QLabel("<b>Cinemática:</b> <font color='#38bdf8'>MAD Outlier Filtered</font>"))
 

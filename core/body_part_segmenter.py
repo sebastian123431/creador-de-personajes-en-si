@@ -1,7 +1,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 from PIL import Image
 
@@ -97,69 +97,79 @@ class BodyPartSegmenter:
         part_labels = np.zeros(len(xs), dtype=object)
 
         neck_y = anchors["neck"][1]
-        pelvis_y = anchors["pelvis"][1]
+        hip_y = anchors["hip"][1]
 
         # 1. Región Cabeza: y < neck_y (con margen de 1px)
         head_indices = ys < (neck_y + 1)
         part_labels[head_indices] = "head"
 
-        # 2. Región Piernas: y >= pelvis_y
-        legs_indices = ys >= pelvis_y
+        # 2. Región Piernas: y >= hip_y
+        legs_indices = ys >= hip_y
 
         if np.any(legs_indices):
             leg_xs = xs[legs_indices]
             leg_ys = ys[legs_indices]
 
-            # Distancia a la pierna izquierda (hip -> knee -> foot)
+            # Distancia a la cadena de pierna izquierda: hip -> left_knee -> left_ankle -> left_foot
             dist_l1 = _point_to_segment_dist_sq(
                 leg_xs, leg_ys,
-                anchors["left_hip"][0], anchors["left_hip"][1],
+                anchors["hip"][0], anchors["hip"][1],
                 anchors["left_knee"][0], anchors["left_knee"][1]
             )
             dist_l2 = _point_to_segment_dist_sq(
                 leg_xs, leg_ys,
                 anchors["left_knee"][0], anchors["left_knee"][1],
+                anchors["left_ankle"][0], anchors["left_ankle"][1]
+            )
+            dist_l3 = _point_to_segment_dist_sq(
+                leg_xs, leg_ys,
+                anchors["left_ankle"][0], anchors["left_ankle"][1],
                 anchors["left_foot"][0], anchors["left_foot"][1]
             )
-            dist_left_leg = np.minimum(dist_l1, dist_l2)
+            dist_left_leg = np.minimum(np.minimum(dist_l1, dist_l2), dist_l3)
 
-            # Distancia a la pierna derecha (hip -> knee -> foot)
+            # Distancia a la cadena de pierna derecha: hip -> right_knee -> right_ankle -> right_foot
             dist_r1 = _point_to_segment_dist_sq(
                 leg_xs, leg_ys,
-                anchors["right_hip"][0], anchors["right_hip"][1],
+                anchors["hip"][0], anchors["hip"][1],
                 anchors["right_knee"][0], anchors["right_knee"][1]
             )
             dist_r2 = _point_to_segment_dist_sq(
                 leg_xs, leg_ys,
                 anchors["right_knee"][0], anchors["right_knee"][1],
+                anchors["right_ankle"][0], anchors["right_ankle"][1]
+            )
+            dist_r3 = _point_to_segment_dist_sq(
+                leg_xs, leg_ys,
+                anchors["right_ankle"][0], anchors["right_ankle"][1],
                 anchors["right_foot"][0], anchors["right_foot"][1]
             )
-            dist_right_leg = np.minimum(dist_r1, dist_r2)
+            dist_right_leg = np.minimum(np.minimum(dist_r1, dist_r2), dist_r3)
 
             leg_choices = np.where(dist_left_leg <= dist_right_leg, "left_leg", "right_leg")
             part_labels[legs_indices] = leg_choices
 
-        # 3. Región Torso y Brazos: (neck_y + 1) <= y < pelvis_y
+        # 3. Región Torso y Brazos: (neck_y + 1) <= y < hip_y
         upper_body_indices = (~head_indices) & (~legs_indices)
 
         if np.any(upper_body_indices):
             ub_xs = xs[upper_body_indices]
             ub_ys = ys[upper_body_indices]
 
-            # Distancia al eje central del torso (neck -> spine -> pelvis)
+            # Distancia al eje central del torso (neck -> chest -> hip)
             dist_t1 = _point_to_segment_dist_sq(
                 ub_xs, ub_ys,
                 anchors["neck"][0], anchors["neck"][1],
-                anchors["spine"][0], anchors["spine"][1]
+                anchors["chest"][0], anchors["chest"][1]
             )
             dist_t2 = _point_to_segment_dist_sq(
                 ub_xs, ub_ys,
-                anchors["spine"][0], anchors["spine"][1],
-                anchors["pelvis"][0], anchors["pelvis"][1]
+                anchors["chest"][0], anchors["chest"][1],
+                anchors["hip"][0], anchors["hip"][1]
             )
             dist_torso = np.minimum(dist_t1, dist_t2)
 
-            # Distancia al brazo izquierdo (shoulder -> elbow -> hand)
+            # Distancia al brazo izquierdo (shoulder -> elbow -> wrist -> hand)
             dist_la1 = _point_to_segment_dist_sq(
                 ub_xs, ub_ys,
                 anchors["left_shoulder"][0], anchors["left_shoulder"][1],
@@ -168,11 +178,16 @@ class BodyPartSegmenter:
             dist_la2 = _point_to_segment_dist_sq(
                 ub_xs, ub_ys,
                 anchors["left_elbow"][0], anchors["left_elbow"][1],
+                anchors["left_wrist"][0], anchors["left_wrist"][1]
+            )
+            dist_la3 = _point_to_segment_dist_sq(
+                ub_xs, ub_ys,
+                anchors["left_wrist"][0], anchors["left_wrist"][1],
                 anchors["left_hand"][0], anchors["left_hand"][1]
             )
-            dist_left_arm = np.minimum(dist_la1, dist_la2)
+            dist_left_arm = np.minimum(np.minimum(dist_la1, dist_la2), dist_la3)
 
-            # Distancia al brazo derecho (shoulder -> elbow -> hand)
+            # Distancia al brazo derecho (shoulder -> elbow -> wrist -> hand)
             dist_ra1 = _point_to_segment_dist_sq(
                 ub_xs, ub_ys,
                 anchors["right_shoulder"][0], anchors["right_shoulder"][1],
@@ -181,9 +196,14 @@ class BodyPartSegmenter:
             dist_ra2 = _point_to_segment_dist_sq(
                 ub_xs, ub_ys,
                 anchors["right_elbow"][0], anchors["right_elbow"][1],
+                anchors["right_wrist"][0], anchors["right_wrist"][1]
+            )
+            dist_ra3 = _point_to_segment_dist_sq(
+                ub_xs, ub_ys,
+                anchors["right_wrist"][0], anchors["right_wrist"][1],
                 anchors["right_hand"][0], anchors["right_hand"][1]
             )
-            dist_right_arm = np.minimum(dist_ra1, dist_ra2)
+            dist_right_arm = np.minimum(np.minimum(dist_ra1, dist_ra2), dist_ra3)
 
             # Ponderación anatómica: el torso tiene un radio corporal central (sesgo de contención)
             torso_radius = max(2.5, abs(anchors["right_shoulder"][0] - anchors["left_shoulder"][0]) * 0.28)
@@ -203,11 +223,11 @@ class BodyPartSegmenter:
 
         pivots = {
             "head": (anchors["neck"][0], anchors["neck"][1]),
-            "torso": (anchors["pelvis"][0], anchors["pelvis"][1]),
+            "torso": (anchors["hip"][0], anchors["hip"][1]),
             "left_arm": (anchors["left_shoulder"][0], anchors["left_shoulder"][1]),
             "right_arm": (anchors["right_shoulder"][0], anchors["right_shoulder"][1]),
-            "left_leg": (anchors["left_hip"][0], anchors["left_hip"][1]),
-            "right_leg": (anchors["right_hip"][0], anchors["right_hip"][1]),
+            "left_leg": (anchors["hip"][0], anchors["hip"][1]),
+            "right_leg": (anchors["hip"][0], anchors["hip"][1]),
         }
 
         parents = {
@@ -221,11 +241,16 @@ class BodyPartSegmenter:
 
         for part_name in BODY_PART_NAMES:
             p_indices = np.where(part_labels == part_name)[0]
-            p_pivot = pivots[part_name]
+            raw_pivot = pivots[part_name]
+            # Validar y clampear pivote dentro del canvas
+            p_pivot = (
+                float(np.clip(raw_pivot[0], 0.0, float(max(0, w - 1)))),
+                float(np.clip(raw_pivot[1], 0.0, float(max(0, h - 1))))
+            )
             p_parent = parents[part_name]
 
             if len(p_indices) == 0:
-                # Parte oculta o sin píxeles
+                # Parte vacía u ocluida
                 px_i = int(round(p_pivot[0]))
                 py_i = int(round(p_pivot[1]))
                 bbox = (px_i, py_i, px_i, py_i)
@@ -235,7 +260,7 @@ class BodyPartSegmenter:
                     pivot_x=float(p_pivot[0]),
                     pivot_y=float(p_pivot[1]),
                     parent=p_parent,
-                    confidence=0.5
+                    confidence=0.0
                 )
                 parts[part_name] = part
                 part_images[part_name] = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
@@ -352,8 +377,12 @@ class BodyPartSegmenter:
 
     def _ensure_anchors(self, skeleton: Skeleton, w: int, h: int, valid_mask: np.ndarray) -> Dict[str, Tuple[float, float]]:
         """
-        Extrae o estima las coordenadas (x, y) de las articulaciones requeridas.
+        Extrae o estima las coordenadas (x, y) de las articulaciones requeridas usando
+        exclusivamente la nomenclatura de OFFICIAL_ANCHOR_NAMES de models/skeleton.py.
+        Si falta un anchor crítico, emite warning y aplica fallback geométrico explícito con menor confianza.
         """
+        from models.skeleton import OFFICIAL_ANCHOR_NAMES
+
         ys, xs = np.where(valid_mask)
         if len(xs) > 0:
             min_x, max_x = float(np.min(xs)), float(np.max(xs))
@@ -364,41 +393,58 @@ class BodyPartSegmenter:
 
         cx = (min_x + max_x) / 2.0
         char_h = max(1.0, max_y - min_y)
+        char_w = max(1.0, max_x - min_x)
 
-        # Valores anatómicos por defecto
+        # Valores anatómicos por defecto para los 18 anchors oficiales
         defaults = {
             "head": (cx, min_y + char_h * 0.15),
             "neck": (cx, min_y + char_h * 0.32),
-            "spine": (cx, min_y + char_h * 0.48),
-            "pelvis": (cx, min_y + char_h * 0.62),
-            "left_shoulder": (cx - (max_x - min_x) * 0.30, min_y + char_h * 0.35),
-            "left_elbow": (cx - (max_x - min_x) * 0.38, min_y + char_h * 0.48),
-            "left_hand": (cx - (max_x - min_x) * 0.42, min_y + char_h * 0.60),
-            "right_shoulder": (cx + (max_x - min_x) * 0.30, min_y + char_h * 0.35),
-            "right_elbow": (cx + (max_x - min_x) * 0.38, min_y + char_h * 0.48),
-            "right_hand": (cx + (max_x - min_x) * 0.42, min_y + char_h * 0.60),
-            "left_hip": (cx - (max_x - min_x) * 0.18, min_y + char_h * 0.62),
-            "left_knee": (cx - (max_x - min_x) * 0.18, min_y + char_h * 0.78),
-            "left_foot": (cx - (max_x - min_x) * 0.20, max_y),
-            "right_hip": (cx + (max_x - min_x) * 0.18, min_y + char_h * 0.62),
-            "right_knee": (cx + (max_x - min_x) * 0.18, min_y + char_h * 0.78),
-            "right_foot": (cx + (max_x - min_x) * 0.20, max_y),
+            "chest": (cx, min_y + char_h * 0.45),
+            "hip": (cx, min_y + char_h * 0.62),
+            "left_shoulder": (cx - char_w * 0.30, min_y + char_h * 0.35),
+            "left_elbow": (cx - char_w * 0.38, min_y + char_h * 0.48),
+            "left_wrist": (cx - char_w * 0.40, min_y + char_h * 0.55),
+            "left_hand": (cx - char_w * 0.42, min_y + char_h * 0.60),
+            "right_shoulder": (cx + char_w * 0.30, min_y + char_h * 0.35),
+            "right_elbow": (cx + char_w * 0.38, min_y + char_h * 0.48),
+            "right_wrist": (cx + char_w * 0.40, min_y + char_h * 0.55),
+            "right_hand": (cx + char_w * 0.42, min_y + char_h * 0.60),
+            "left_knee": (cx - char_w * 0.18, min_y + char_h * 0.78),
+            "left_ankle": (cx - char_w * 0.19, min_y + char_h * 0.90),
+            "left_foot": (cx - char_w * 0.20, max_y),
+            "right_knee": (cx + char_w * 0.18, min_y + char_h * 0.78),
+            "right_ankle": (cx + char_w * 0.19, min_y + char_h * 0.90),
+            "right_foot": (cx + char_w * 0.20, max_y),
         }
 
+        missing_critical: List[str] = []
         result = {}
-        for name, def_pos in defaults.items():
+        for name in OFFICIAL_ANCHOR_NAMES:
             a = skeleton.get_anchor(name)
             if a is not None:
-                result[name] = (float(a.x), float(a.y))
+                # Clampear coordenadas al canvas
+                clamped_x = float(np.clip(a.x, 0.0, float(max(0, w - 1))))
+                clamped_y = float(np.clip(a.y, 0.0, float(max(0, h - 1))))
+                result[name] = (clamped_x, clamped_y)
             else:
-                result[name] = def_pos
+                def_pos = defaults.get(name, (cx, min_y + char_h * 0.5))
+                clamped_x = float(np.clip(def_pos[0], 0.0, float(max(0, w - 1))))
+                clamped_y = float(np.clip(def_pos[1], 0.0, float(max(0, h - 1))))
+                result[name] = (clamped_x, clamped_y)
+                missing_critical.append(name)
+
+        if missing_critical:
+            logger.warning(
+                f"BodyPartSegmenter: Anchors oficiales ausentes en skeleton: {missing_critical}. "
+                f"Se utilizó estrategia explícita de fallback geométrico con menor confianza."
+            )
 
         return result
 
     def _build_empty_parts(self, anchors: Dict[str, Tuple[float, float]], orientation: str) -> Dict[str, BodyPart]:
         parts = {}
         for name in BODY_PART_NAMES:
-            p = anchors.get("neck" if name == "head" else "pelvis", (0.0, 0.0))
+            p = anchors.get("neck" if name == "head" else "hip", (0.0, 0.0))
             parts[name] = BodyPart(
                 name=name,
                 bbox=(int(p[0]), int(p[1]), int(p[0]), int(p[1])),

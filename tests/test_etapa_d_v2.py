@@ -94,36 +94,36 @@ def test_angle_helpers():
 
 
 def _create_synthetic_walk_cycle() -> List[Skeleton]:
-    """Genera 4 esqueletos sintéticos que simulan un ciclo de caminata estándar."""
+    """Genera 4 esqueletos sintéticos que simulan un ciclo de caminata estándar con nomenclatura oficial."""
     cycle = []
     for f in range(1, 5):
         sk = Skeleton()
         # Centro base
         sk.set_anchor("head", 32, 16)
         sk.set_anchor("neck", 32, 24)
-        sk.set_anchor("spine", 32, 36)
-        sk.set_anchor("pelvis", 32, 48)
+        sk.set_anchor("chest", 32, 36)
+        sk.set_anchor("hip", 32, 48)
 
         # Brazos oscilantes
         swing = (1 if f % 2 == 0 else -1) * 4
         sk.set_anchor("left_shoulder", 22, 26)
         sk.set_anchor("left_elbow", 18 + swing, 36)
+        sk.set_anchor("left_wrist", 17 + swing * 2, 42)
         sk.set_anchor("left_hand", 16 + swing * 2, 48)
 
         sk.set_anchor("right_shoulder", 42, 26)
         sk.set_anchor("right_elbow", 46 - swing, 36)
+        sk.set_anchor("right_wrist", 47 - swing * 2, 42)
         sk.set_anchor("right_hand", 48 - swing * 2, 48)
 
         # Piernas oscilantes
-        sk.set_anchor("left_hip", 26, 48)
         sk.set_anchor("left_knee", 26 - swing, 64)
+        sk.set_anchor("left_ankle", 25 - swing * 2, 74)
         sk.set_anchor("left_foot", 24 - swing * 2, 80)
-        sk.set_anchor("left_toe", 24 - swing * 2, 84)
 
-        sk.set_anchor("right_hip", 38, 48)
         sk.set_anchor("right_knee", 38 + swing, 64)
+        sk.set_anchor("right_ankle", 39 + swing * 2, 74)
         sk.set_anchor("right_foot", 40 + swing * 2, 80)
-        sk.set_anchor("right_toe", 40 + swing * 2, 84)
 
         cycle.append(sk)
     return cycle

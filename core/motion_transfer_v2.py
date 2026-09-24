@@ -1,7 +1,7 @@
 import logging
 import math
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 from PIL import Image
 
@@ -83,16 +83,40 @@ def pixel_rotate(
     return Image.fromarray(dest_arr, mode="RGBA"), (offset_x, offset_y)
 
 
+def compute_motion_delta_score(frames: List[Image.Image]) -> float:
+    """
+    Calcula la métrica de variación de movimiento (motion_delta_score)
+    entre los frames generados de una animación. Retorna el porcentaje promedio de píxeles
+    que cambian entre frames consecutivos.
+    """
+    if len(frames) < 2:
+        return 0.0
+
+    scores = []
+    for i in range(len(frames)):
+        f_curr = np.array(frames[i].convert("RGBA"))
+        f_next = np.array(frames[(i + 1) % len(frames)].convert("RGBA"))
+        # Diferencia de píxeles no idénticos
+        diff = np.any(f_curr != f_next, axis=-1)
+        scores.append(float(np.mean(diff) * 100.0))
+
+    return float(np.mean(scores))
+
+
 class MotionTransferV2:
     """
     Motor de Transferencia de Movimiento Articulado V2.
     
     PRIORIDAD ABSOLUTA: CONSISTENCIA VISUAL > CREATIVIDAD.
-    - HeadIdentityLock: La cabeza y rostro del personaje original se conservan 100% bit-exactos,
-      trasladándose según la cinemática de la plantilla sin ninguna deformación ni regeneración.
-    - pixel_rotate: Rotación de extremidades sobre pivotes sin aberraciones ni difuminados.
-    - LayerResolver: Ordenamiento estricto de capas según la orientación del sprite.
-    - PaletteGuard: Garantía de que ningún color extraño entre en el sprite final.
+    - HeadIdentityLock activo: Máxima preservación de identidad visual. La cabeza y rostro
+      del personaje de referencia se conservan íntegros, trasladándose con precisión geométrica.
+    - Articulación anatómica por cadenas: Brazos (upper arm, forearm, hand) y Piernas (thigh,
+      lower leg, foot) rotados en torno a sus pivotes articulares reales (hombro, codo, mano,
+      cadera, rodilla, pie).
+    - pixel_rotate: Rotación de extremidades con muestreo Nearest-Neighbor estricto sin
+      interpolación suave ni antialiasing.
+    - LayerResolver: Ordenamiento estricto de capas Z-index según la orientación.
+    - PaletteGuard: Garantía de que ningún color espurio penetre en los sprites finales.
     """
 
     def __init__(
@@ -105,6 +129,111 @@ class MotionTransferV2:
         self.pose_analyzer = pose_analyzer or PoseAnalyzerV2()
         self.guard = guard
 
+    def _render_limb_chain(
+        self,
+        limb_name: str,
+        limb_part: BodyPart,
+        limb_img: Image.Image,
+        skeleton: Skeleton,
+        frame_template: Any,
+        root_dx: float,
+        root_dy: float,
+        frame_canvas: Image.Image,
+    ):
+        """
+        Renderiza una extremidad articulada dividiéndola en su cadena anatómica:
+        - Brazos: upper_arm (pivote: shoulder), forearm (pivote: elbow), hand (pivote: hand/wrist)
+        - Piernas: thigh (pivote: hip), lower_leg (pivote: knee), foot (pivote: foot)
+        """
+        arr = np.array(limb_img)
+        h, w = arr.shape[:2]
+        bx0, by0, bx1, by1 = limb_part.bbox
+
+        # Determinar cadena y pivotes
+        if "arm" in limb_name:
+            prefix = "left_" if "left" in limb_name else "right_"
+            p_shoulder = skeleton.get_anchor(f"{prefix}shoulder")
+            p_elbow = skeleton.get_anchor(f"{prefix}elbow")
+            p_wrist = skeleton.get_anchor(f"{prefix}wrist")
+            p_hand = skeleton.get_anchor(f"{prefix}hand")
+
+            elbow_y = p_elbow.y if p_elbow else by0 + h // 3
+            wrist_y = p_wrist.y if p_wrist else by0 + (2 * h) // 3
+
+            sub_defs = [
+                (f"{prefix}upper_arm", 0, max(1, min(h, elbow_y - by0)),
+                 (p_shoulder.x if p_shoulder else bx0, p_shoulder.y if p_shoulder else by0)),
+                (f"{prefix}forearm", max(0, min(h, elbow_y - by0)), max(1, min(h, wrist_y - by0)),
+                 (p_elbow.x if p_elbow else bx0, p_elbow.y if p_elbow else by0 + h // 3)),
+                (f"{prefix}hand", max(0, min(h, wrist_y - by0)), h,
+                 (p_hand.x if p_hand else (p_wrist.x if p_wrist else bx0),
+                  p_hand.y if p_hand else (p_wrist.y if p_wrist else by0 + (2 * h) // 3))),
+            ]
+        else:  # leg
+            prefix = "left_" if "left" in limb_name else "right_"
+            p_hip = skeleton.get_anchor("hip")
+            p_knee = skeleton.get_anchor(f"{prefix}knee")
+            p_ankle = skeleton.get_anchor(f"{prefix}ankle")
+            p_foot = skeleton.get_anchor(f"{prefix}foot")
+
+            knee_y = p_knee.y if p_knee else by0 + h // 2
+            ankle_y = p_ankle.y if p_ankle else by0 + (3 * h) // 4
+
+            sub_defs = [
+                (f"{prefix}thigh", 0, max(1, min(h, knee_y - by0)),
+                 (p_hip.x if p_hip else bx0, p_hip.y if p_hip else by0)),
+                (f"{prefix}lower_leg", max(0, min(h, knee_y - by0)), max(1, min(h, ankle_y - by0)),
+                 (p_knee.x if p_knee else bx0, p_knee.y if p_knee else by0 + h // 2)),
+                (f"{prefix}foot", max(0, min(h, ankle_y - by0)), h,
+                 (p_foot.x if p_foot else bx0, p_foot.y if p_foot else by0 + (3 * h) // 4)),
+            ]
+
+        # Si el recorte es de altura muy reducida (< 4px), rotar como bloque único
+        if h < 4:
+            p_motion = frame_template.parts.get(limb_name, PartMotion()) if frame_template else PartMotion()
+            tot_dx = int(round(p_motion.dx + root_dx))
+            tot_dy = int(round(p_motion.dy + root_dy))
+            pivot_rel = (limb_part.pivot_x - bx0, limb_part.pivot_y - by0)
+            rot_img, (rot_off_x, rot_off_y) = pixel_rotate(limb_img, p_motion.angle_deg, pivot_rel)
+            frame_canvas.paste(rot_img, (bx0 + rot_off_x + tot_dx, by0 + rot_off_y + tot_dy), mask=rot_img)
+            return
+
+        rendered_any = False
+        for sub_name, y_start, y_end, (piv_x, piv_y) in sub_defs:
+            if y_start >= y_end or y_start >= h:
+                continue
+
+            sub_arr = np.zeros_like(arr)
+            sub_arr[y_start:y_end, :] = arr[y_start:y_end, :]
+            # Comprobar si hay píxeles en esta subsección
+            if not np.any(sub_arr[:, :, 3] > 10):
+                continue
+
+            sub_img = Image.fromarray(sub_arr, mode="RGBA")
+            sub_motion = frame_template.parts.get(sub_name) if frame_template else None
+            if not sub_motion:
+                sub_motion = frame_template.parts.get(limb_name, PartMotion()) if frame_template else PartMotion()
+
+            tot_dx = int(round(sub_motion.dx + root_dx))
+            tot_dy = int(round(sub_motion.dy + root_dy))
+
+            piv_rel = (piv_x - bx0, piv_y - by0)
+            rot_img, (rot_off_x, rot_off_y) = pixel_rotate(sub_img, sub_motion.angle_deg, piv_rel)
+
+            paste_x = bx0 + rot_off_x + tot_dx
+            paste_y = by0 + rot_off_y + tot_dy
+            frame_canvas.paste(rot_img, (paste_x, paste_y), mask=rot_img)
+            rendered_any = True
+
+        if not rendered_any:
+            # Fallback en caso de que las subsecciones no capturaran píxeles
+            p_motion = frame_template.parts.get(limb_name, PartMotion()) if frame_template else PartMotion()
+            tot_dx = int(round(p_motion.dx + root_dx))
+            tot_dy = int(round(p_motion.dy + root_dy))
+            pivot_rel = (limb_part.pivot_x - bx0, limb_part.pivot_y - by0)
+            rot_img, (rot_off_x, rot_off_y) = pixel_rotate(limb_img, p_motion.angle_deg, pivot_rel)
+            frame_canvas.paste(rot_img, (bx0 + rot_off_x + tot_dx, by0 + rot_off_y + tot_dy), mask=rot_img)
+
     def generate_animation_frames(
         self,
         reference_image: Union[Path, str, Image.Image],
@@ -114,7 +243,7 @@ class MotionTransferV2:
     ) -> List[Image.Image]:
         """
         Genera los frames de animación transfiriendo la plantilla articulada
-        al personaje de referencia.
+        al personaje de referencia con máxima preservación de identidad visual.
         """
         if isinstance(reference_image, (str, Path)):
             ref_img = Image.open(str(reference_image)).convert("RGBA")
@@ -161,22 +290,31 @@ class MotionTransferV2:
                     continue
 
                 p_img = part_images[pname]
-                p_motion = frame_template.parts.get(pname, PartMotion()) if frame_template else PartMotion()
-
-                tot_dx = int(round(p_motion.dx + root_dx))
-                tot_dy = int(round(p_motion.dy + root_dy))
 
                 if pname == "head":
                     # --- HEAD IDENTITY LOCK ---
-                    # La cabeza se traslada de forma entera para preservar el 100% de píxeles originales
+                    # Preservación de identidad visual: la cabeza se traslada de forma entera
+                    # sin deformación ni rotación distorsionadora, preservando los píxeles originales.
+                    p_motion = frame_template.parts.get("head", PartMotion()) if frame_template else PartMotion()
+                    tot_dx = int(round(p_motion.dx + root_dx))
+                    tot_dy = int(round(p_motion.dy + root_dy))
                     paste_x = part.bbox[0] + tot_dx
                     paste_y = part.bbox[1] + tot_dy
                     frame_canvas.paste(p_img, (paste_x, paste_y), mask=p_img)
+
+                elif "arm" in pname or "leg" in pname:
+                    # Articulación anatómica por cadenas (upper/fore/hand, thigh/lower/foot)
+                    self._render_limb_chain(
+                        pname, part, p_img, skel, frame_template, root_dx, root_dy, frame_canvas
+                    )
+
                 else:
-                    # Extremidades y torso: rotación cinemática con pixel_rotate sobre el pivote
+                    # Torso: rotación y traslación cinemática sobre pivote
+                    p_motion = frame_template.parts.get(pname, PartMotion()) if frame_template else PartMotion()
+                    tot_dx = int(round(p_motion.dx + root_dx))
+                    tot_dy = int(round(p_motion.dy + root_dy))
                     pivot_rel = (part.pivot_x - part.bbox[0], part.pivot_y - part.bbox[1])
                     rot_img, (rot_off_x, rot_off_y) = pixel_rotate(p_img, p_motion.angle_deg, pivot_rel)
-
                     paste_x = part.bbox[0] + rot_off_x + tot_dx
                     paste_y = part.bbox[1] + rot_off_y + tot_dy
                     frame_canvas.paste(rot_img, (paste_x, paste_y), mask=rot_img)
@@ -189,6 +327,18 @@ class MotionTransferV2:
                 clean_frame.save(file_path, "PNG")
 
             generated_frames.append(clean_frame)
+
+        # 6. Métrica de validación de movimiento
+        delta_score = compute_motion_delta_score(generated_frames)
+        if delta_score < 0.05:
+            logger.warning(
+                f"Motion template '{template.animation_name}' produced insufficient visible motion. "
+                f"motion_delta_score={delta_score:.3f}%"
+            )
+        else:
+            logger.info(
+                f"Animación '{template.animation_name}': motion_delta_score={delta_score:.2f}%"
+            )
 
         logger.info(f"Generados {len(generated_frames)} frames de movimiento articulado para '{template.animation_name}'")
         return generated_frames

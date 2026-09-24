@@ -29,6 +29,22 @@ class DetectedCellV2:
         x, y, w, h = self.cell_rect
         return (x, y, x + w, y + h)
 
+    @property
+    def x(self) -> int:
+        return self.cell_rect[0]
+
+    @property
+    def y(self) -> int:
+        return self.cell_rect[1]
+
+    @property
+    def w(self) -> int:
+        return self.cell_rect[2]
+
+    @property
+    def h(self) -> int:
+        return self.cell_rect[3]
+
 
 @dataclass
 class SheetDetectionResultV2:

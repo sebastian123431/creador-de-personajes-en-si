@@ -36,7 +36,7 @@ def test_annotation_manager_paths_and_io(tmp_path: Path):
 
     skel = Skeleton()
     skel.set_anchor("head", 32, 16, confidence=1.0, is_manual=True)
-    skel.set_anchor("pelvis", 32, 48, confidence=0.85, is_manual=False)
+    skel.set_anchor("hip", 32, 48, confidence=0.85, is_manual=False)
 
     # Comprobar que inicialmente no existe
     assert not manager.has_annotation("diego_vallenar", "rnormal", "walk_down", 1)
@@ -183,7 +183,7 @@ def test_interactive_anchor_canvas_coordinates(qapp, tmp_path: Path):
     canvas = InteractiveAnchorCanvas()
     skel = Skeleton()
     skel.set_anchor("head", 24, 12, 0.9)
-    skel.set_anchor("pelvis", 24, 45, 0.9)
+    skel.set_anchor("hip", 24, 45, 0.9)
 
     canvas.set_data(img_path, skel, scale=4.0)
 

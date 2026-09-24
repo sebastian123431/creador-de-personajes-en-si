@@ -1,11 +1,35 @@
+# Python & Bytecode
 __pycache__/
 *.py[cod]
+*.pyc
 *.pyo
+
+# Testing & Cache
 .pytest_cache/
 .cache/
+
+# Virtual Environments & IDE
 .venv/
 venv/
 .idea/
 .vscode/
 Thumbs.db
 .DS_Store
+
+# Generated Artefacts / Output
+dataset/extracted_frames/
+dataset/normalized/
+dataset/generated_frames/
+dataset/transferred_v2/
+dataset/templates_v2/
+dataset/body_parts/
+dataset/annotations/
+
+exports/
+output/
+build/
+
+# PROTECTED MASTER DATASET (DO NOT IGNORE)
+!dataset/finished_characters/
+!dataset/finished_characters/approved/
+!dataset/finished_characters/approved/**

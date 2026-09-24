@@ -59,6 +59,8 @@ class MainWindow(QMainWindow):
         self.v2_animations: Dict[str, Animation] = {}
         self.training_thread: Optional[QThread] = None
         self.training_worker: Optional[TrainingWorker] = None
+        self.training_v2_thread: Optional[QThread] = None
+        self.training_v2_worker: Optional[Any] = None
 
         self._setup_ui()
         self._setup_menu()
@@ -476,33 +478,61 @@ class MainWindow(QMainWindow):
             "• Esqueleto anatómico de 18 anclajes con suavizado temporal<br>"
             "• Segmentación por partes corporales y resolución de capas Z<br>"
             "• Aprendizaje cinemático con filtrado de anomalías MAD<br>"
-            "• HeadIdentityLock y PaletteGuard: 100% consistencia visual<br>"
+            "• HeadIdentityLock y PaletteGuard: Máxima preservación de identidad visual<br>"
             "• Exportación de Spritesheet y metadatos para Unity / Godot.<br><br>"
             "Desarrollado para el videojuego <i>Villa del Chef</i>."
         )
 
     def _on_train_v2_clicked(self):
-        """Entrena las 16 plantillas cinemáticas V2 con filtrado MAD."""
-        progress_dlg = QProgressDialog("Entrenando plantillas cinemáticas V2...", "Cancelar", 0, 6, self)
+        """Entrena las 16 plantillas cinemáticas V2 con filtrado MAD de forma asíncrona en QThread."""
+        progress_dlg = QProgressDialog("Iniciando entrenamiento cinemático V2...", "Cancelar", 0, 6, self)
         progress_dlg.setWindowTitle("Entrenamiento Articulado V2")
         progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dlg.setMinimumDuration(0)
+        progress_dlg.setValue(0)
         progress_dlg.show()
 
-        worker = self.training_service.create_articulated_worker()
+        self.training_v2_thread = QThread()
+        self.training_v2_worker = self.training_service.create_articulated_worker()
+        self.training_v2_worker.moveToThread(self.training_v2_thread)
+
+        self.training_v2_thread.started.connect(self.training_v2_worker.run_training)
 
         def on_prog(msg, cur, tot):
             progress_dlg.setLabelText(msg)
             progress_dlg.setValue(cur)
 
-        worker.progress.connect(on_prog)
-        rep = self.training_service.run_synchronous_articulated_training()
-        progress_dlg.close()
+        def on_finished(rep: ArticulatedTrainingReport):
+            progress_dlg.close()
+            if self.training_v2_thread:
+                self.training_v2_thread.quit()
+                self.training_v2_thread.wait()
 
-        QMessageBox.information(
-            self,
-            "Entrenamiento V2 Completado",
-            rep.summary_text()
-        )
+            QMessageBox.information(
+                self,
+                "Entrenamiento V2 Completado",
+                rep.summary_text()
+            )
+            self._update_status_stats()
+
+        def on_error(err_msg: str):
+            progress_dlg.close()
+            if self.training_v2_thread:
+                self.training_v2_thread.quit()
+                self.training_v2_thread.wait()
+            QMessageBox.critical(self, "Error de Entrenamiento V2", f"Ocurrió un error:\n{err_msg}")
+
+        def on_cancel():
+            if self.training_v2_thread and self.training_v2_thread.isRunning():
+                self.training_v2_thread.requestInterruption()
+                self.training_v2_thread.quit()
+
+        progress_dlg.canceled.connect(on_cancel)
+        self.training_v2_worker.progress.connect(on_prog)
+        self.training_v2_worker.finished.connect(on_finished)
+        self.training_v2_worker.error.connect(on_error)
+
+        self.training_v2_thread.start()
 
     def _on_generate_v2_clicked(self):
         """Genera movimiento articulado V2 respetando HeadIdentityLock y PaletteGuard."""
@@ -528,7 +558,7 @@ class MainWindow(QMainWindow):
                 "Movimiento Articulado V2 Generado",
                 f"Se generaron exitosamente las 16 animaciones V2 para "
                 f"'{self.current_character.display_name}' ({self.current_variant_name}).\n\n"
-                f"• HeadIdentityLock: ACTIVO (Rostro 100% bit-exacto)\n"
+                f"• HeadIdentityLock: ACTIVO (Máxima preservación de identidad visual)\n"
                 f"• PaletteGuard: ACTIVO (Sin colores espurios)\n"
                 f"• Cinemática: 18 articulaciones anatómicas"
             )

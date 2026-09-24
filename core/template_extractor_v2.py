@@ -88,14 +88,14 @@ class TemplateExtractorV2:
             return []
 
         base_skel = skeletons[0]
-        base_pelvis = self._get_anchor_pos(base_skel, "pelvis", (32.0, 48.0))
+        base_hip = self._get_anchor_pos(base_skel, "hip", (32.0, 48.0))
 
         sequence_data = []
 
         for frame_idx, cur_skel in enumerate(skeletons, start=1):
-            cur_pelvis = self._get_anchor_pos(cur_skel, "pelvis", (32.0, 48.0))
-            root_dx = cur_pelvis[0] - base_pelvis[0]
-            root_dy = cur_pelvis[1] - base_pelvis[1]
+            cur_hip = self._get_anchor_pos(cur_skel, "hip", (32.0, 48.0))
+            root_dx = cur_hip[0] - base_hip[0]
+            root_dy = cur_hip[1] - base_hip[1]
 
             parts_kinematics: Dict[str, Dict[str, float]] = {}
 
@@ -115,9 +115,9 @@ class TemplateExtractorV2:
                 "angle_deg": d_theta_head,
             }
 
-            # 2. Torso (eje pelvis -> neck)
-            base_torso_ang = _calculate_segment_angle_deg(base_pelvis, b_neck)
-            cur_torso_ang = _calculate_segment_angle_deg(cur_pelvis, c_neck)
+            # 2. Torso (eje hip -> neck)
+            base_torso_ang = _calculate_segment_angle_deg(base_hip, b_neck)
+            cur_torso_ang = _calculate_segment_angle_deg(cur_hip, c_neck)
             d_theta_torso = _normalize_angle_deg(cur_torso_ang - base_torso_ang)
 
             parts_kinematics["torso"] = {
@@ -126,10 +126,14 @@ class TemplateExtractorV2:
                 "angle_deg": d_theta_torso,
             }
 
-            # 3. Brazo izquierdo (left_shoulder -> left_hand)
+            # 3. Brazo izquierdo completo y subcadenas (shoulder -> elbow -> wrist -> hand)
             b_ls = self._get_anchor_pos(base_skel, "left_shoulder", (20.0, 28.0))
+            b_le = self._get_anchor_pos(base_skel, "left_elbow", (18.0, 38.0))
+            b_lw = self._get_anchor_pos(base_skel, "left_wrist", (16.0, 44.0))
             b_lh = self._get_anchor_pos(base_skel, "left_hand", (16.0, 48.0))
             c_ls = self._get_anchor_pos(cur_skel, "left_shoulder", (20.0, 28.0))
+            c_le = self._get_anchor_pos(cur_skel, "left_elbow", (18.0, 38.0))
+            c_lw = self._get_anchor_pos(cur_skel, "left_wrist", (16.0, 44.0))
             c_lh = self._get_anchor_pos(cur_skel, "left_hand", (16.0, 48.0))
 
             base_la_ang = _calculate_segment_angle_deg(b_ls, b_lh)
@@ -142,10 +146,35 @@ class TemplateExtractorV2:
                 "angle_deg": d_theta_la,
             }
 
-            # 4. Brazo derecho (right_shoulder -> right_hand)
+            # Subpartes anatómicas del brazo izquierdo
+            d_theta_l_upper = _normalize_angle_deg(_calculate_segment_angle_deg(c_ls, c_le) - _calculate_segment_angle_deg(b_ls, b_le))
+            d_theta_l_fore = _normalize_angle_deg(_calculate_segment_angle_deg(c_le, c_lw) - _calculate_segment_angle_deg(b_le, b_lw))
+            d_theta_l_hand = _normalize_angle_deg(_calculate_segment_angle_deg(c_lw, c_lh) - _calculate_segment_angle_deg(b_lw, b_lh))
+
+            parts_kinematics["left_upper_arm"] = {
+                "dx": (c_le[0] - c_ls[0]) - (b_le[0] - b_ls[0]),
+                "dy": (c_le[1] - c_ls[1]) - (b_le[1] - b_ls[1]),
+                "angle_deg": d_theta_l_upper,
+            }
+            parts_kinematics["left_forearm"] = {
+                "dx": (c_lw[0] - c_le[0]) - (b_lw[0] - b_le[0]),
+                "dy": (c_lw[1] - c_le[1]) - (b_lw[1] - b_le[1]),
+                "angle_deg": d_theta_l_fore,
+            }
+            parts_kinematics["left_hand"] = {
+                "dx": (c_lh[0] - c_lw[0]) - (b_lh[0] - b_lw[0]),
+                "dy": (c_lh[1] - c_lw[1]) - (b_lh[1] - b_lw[1]),
+                "angle_deg": d_theta_l_hand,
+            }
+
+            # 4. Brazo derecho completo y subcadenas (shoulder -> elbow -> wrist -> hand)
             b_rs = self._get_anchor_pos(base_skel, "right_shoulder", (44.0, 28.0))
+            b_re = self._get_anchor_pos(base_skel, "right_elbow", (46.0, 38.0))
+            b_rw = self._get_anchor_pos(base_skel, "right_wrist", (48.0, 44.0))
             b_rh = self._get_anchor_pos(base_skel, "right_hand", (48.0, 48.0))
             c_rs = self._get_anchor_pos(cur_skel, "right_shoulder", (44.0, 28.0))
+            c_re = self._get_anchor_pos(cur_skel, "right_elbow", (46.0, 38.0))
+            c_rw = self._get_anchor_pos(cur_skel, "right_wrist", (48.0, 44.0))
             c_rh = self._get_anchor_pos(cur_skel, "right_hand", (48.0, 48.0))
 
             base_ra_ang = _calculate_segment_angle_deg(b_rs, b_rh)
@@ -158,43 +187,110 @@ class TemplateExtractorV2:
                 "angle_deg": d_theta_ra,
             }
 
-            # 5. Pierna izquierda (left_hip -> left_foot)
-            b_lhip = self._get_anchor_pos(base_skel, "left_hip", (24.0, 48.0))
+            # Subpartes anatómicas del brazo derecho
+            d_theta_r_upper = _normalize_angle_deg(_calculate_segment_angle_deg(c_rs, c_re) - _calculate_segment_angle_deg(b_rs, b_re))
+            d_theta_r_fore = _normalize_angle_deg(_calculate_segment_angle_deg(c_re, c_rw) - _calculate_segment_angle_deg(b_re, b_rw))
+            d_theta_r_hand = _normalize_angle_deg(_calculate_segment_angle_deg(c_rw, c_rh) - _calculate_segment_angle_deg(b_rw, b_rh))
+
+            parts_kinematics["right_upper_arm"] = {
+                "dx": (c_re[0] - c_rs[0]) - (b_re[0] - b_rs[0]),
+                "dy": (c_re[1] - c_rs[1]) - (b_re[1] - b_rs[1]),
+                "angle_deg": d_theta_r_upper,
+            }
+            parts_kinematics["right_forearm"] = {
+                "dx": (c_rw[0] - c_re[0]) - (b_rw[0] - b_re[0]),
+                "dy": (c_rw[1] - c_re[1]) - (b_rw[1] - b_re[1]),
+                "angle_deg": d_theta_r_fore,
+            }
+            parts_kinematics["right_hand"] = {
+                "dx": (c_rh[0] - c_rw[0]) - (b_rh[0] - b_rw[0]),
+                "dy": (c_rh[1] - c_rw[1]) - (b_rh[1] - b_rw[1]),
+                "angle_deg": d_theta_r_hand,
+            }
+
+            # 5. Pierna izquierda completa y subcadenas (hip -> knee -> ankle -> foot)
+            b_lk = self._get_anchor_pos(base_skel, "left_knee", (24.0, 62.0))
+            b_la = self._get_anchor_pos(base_skel, "left_ankle", (24.0, 68.0))
             b_lfoot = self._get_anchor_pos(base_skel, "left_foot", (24.0, 72.0))
-            c_lhip = self._get_anchor_pos(cur_skel, "left_hip", (24.0, 48.0))
+            c_lk = self._get_anchor_pos(cur_skel, "left_knee", (24.0, 62.0))
+            c_la = self._get_anchor_pos(cur_skel, "left_ankle", (24.0, 68.0))
             c_lfoot = self._get_anchor_pos(cur_skel, "left_foot", (24.0, 72.0))
 
-            base_lleg_ang = _calculate_segment_angle_deg(b_lhip, b_lfoot)
-            cur_lleg_ang = _calculate_segment_angle_deg(c_lhip, c_lfoot)
+            base_lleg_ang = _calculate_segment_angle_deg(base_hip, b_lfoot)
+            cur_lleg_ang = _calculate_segment_angle_deg(cur_hip, c_lfoot)
             d_theta_lleg = _normalize_angle_deg(cur_lleg_ang - base_lleg_ang)
 
             parts_kinematics["left_leg"] = {
-                "dx": (c_lfoot[0] - c_lhip[0]) - (b_lfoot[0] - b_lhip[0]),
-                "dy": (c_lfoot[1] - c_lhip[1]) - (b_lfoot[1] - b_lhip[1]),
+                "dx": (c_lfoot[0] - cur_hip[0]) - (b_lfoot[0] - base_hip[0]),
+                "dy": (c_lfoot[1] - cur_hip[1]) - (b_lfoot[1] - base_hip[1]),
                 "angle_deg": d_theta_lleg,
             }
 
-            # 6. Pierna derecha (right_hip -> right_foot)
-            b_rhip = self._get_anchor_pos(base_skel, "right_hip", (40.0, 48.0))
+            # Subpartes anatómicas pierna izquierda
+            d_theta_l_thigh = _normalize_angle_deg(_calculate_segment_angle_deg(cur_hip, c_lk) - _calculate_segment_angle_deg(base_hip, b_lk))
+            d_theta_l_lower = _normalize_angle_deg(_calculate_segment_angle_deg(c_lk, c_la) - _calculate_segment_angle_deg(b_lk, b_la))
+            d_theta_l_foot = _normalize_angle_deg(_calculate_segment_angle_deg(c_la, c_lfoot) - _calculate_segment_angle_deg(b_la, b_lfoot))
+
+            parts_kinematics["left_thigh"] = {
+                "dx": (c_lk[0] - cur_hip[0]) - (b_lk[0] - base_hip[0]),
+                "dy": (c_lk[1] - cur_hip[1]) - (b_lk[1] - base_hip[1]),
+                "angle_deg": d_theta_l_thigh,
+            }
+            parts_kinematics["left_lower_leg"] = {
+                "dx": (c_la[0] - c_lk[0]) - (b_la[0] - b_lk[0]),
+                "dy": (c_la[1] - c_lk[1]) - (b_la[1] - b_lk[1]),
+                "angle_deg": d_theta_l_lower,
+            }
+            parts_kinematics["left_foot"] = {
+                "dx": (c_lfoot[0] - c_la[0]) - (b_lfoot[0] - b_la[0]),
+                "dy": (c_lfoot[1] - c_la[1]) - (b_lfoot[1] - b_la[1]),
+                "angle_deg": d_theta_l_foot,
+            }
+
+            # 6. Pierna derecha completa y subcadenas (hip -> knee -> ankle -> foot)
+            b_rk = self._get_anchor_pos(base_skel, "right_knee", (40.0, 62.0))
+            b_ra = self._get_anchor_pos(base_skel, "right_ankle", (40.0, 68.0))
             b_rfoot = self._get_anchor_pos(base_skel, "right_foot", (40.0, 72.0))
-            c_rhip = self._get_anchor_pos(cur_skel, "right_hip", (40.0, 48.0))
+            c_rk = self._get_anchor_pos(cur_skel, "right_knee", (40.0, 62.0))
+            c_ra = self._get_anchor_pos(cur_skel, "right_ankle", (40.0, 68.0))
             c_rfoot = self._get_anchor_pos(cur_skel, "right_foot", (40.0, 72.0))
 
-            base_rleg_ang = _calculate_segment_angle_deg(b_rhip, b_rfoot)
-            cur_rleg_ang = _calculate_segment_angle_deg(c_rhip, c_rfoot)
+            base_rleg_ang = _calculate_segment_angle_deg(base_hip, b_rfoot)
+            cur_rleg_ang = _calculate_segment_angle_deg(cur_hip, c_rfoot)
             d_theta_rleg = _normalize_angle_deg(cur_rleg_ang - base_rleg_ang)
 
             parts_kinematics["right_leg"] = {
-                "dx": (c_rfoot[0] - c_rhip[0]) - (b_rfoot[0] - b_rhip[0]),
-                "dy": (c_rfoot[1] - c_rhip[1]) - (b_rfoot[1] - b_rhip[1]),
+                "dx": (c_rfoot[0] - cur_hip[0]) - (b_rfoot[0] - base_hip[0]),
+                "dy": (c_rfoot[1] - cur_hip[1]) - (b_rfoot[1] - base_hip[1]),
                 "angle_deg": d_theta_rleg,
             }
 
-            # Anchors relativos al pelvis del frame 1
+            # Subpartes anatómicas pierna derecha
+            d_theta_r_thigh = _normalize_angle_deg(_calculate_segment_angle_deg(cur_hip, c_rk) - _calculate_segment_angle_deg(base_hip, b_rk))
+            d_theta_r_lower = _normalize_angle_deg(_calculate_segment_angle_deg(c_rk, c_ra) - _calculate_segment_angle_deg(b_rk, b_ra))
+            d_theta_r_foot = _normalize_angle_deg(_calculate_segment_angle_deg(c_ra, c_rfoot) - _calculate_segment_angle_deg(b_ra, b_rfoot))
+
+            parts_kinematics["right_thigh"] = {
+                "dx": (c_rk[0] - cur_hip[0]) - (b_rk[0] - base_hip[0]),
+                "dy": (c_rk[1] - cur_hip[1]) - (b_rk[1] - base_hip[1]),
+                "angle_deg": d_theta_r_thigh,
+            }
+            parts_kinematics["right_lower_leg"] = {
+                "dx": (c_ra[0] - c_rk[0]) - (b_ra[0] - b_rk[0]),
+                "dy": (c_ra[1] - c_rk[1]) - (b_ra[1] - b_rk[1]),
+                "angle_deg": d_theta_r_lower,
+            }
+            parts_kinematics["right_foot"] = {
+                "dx": (c_rfoot[0] - c_ra[0]) - (b_rfoot[0] - b_ra[0]),
+                "dy": (c_rfoot[1] - c_ra[1]) - (b_rfoot[1] - b_ra[1]),
+                "angle_deg": d_theta_r_foot,
+            }
+
+            # Anchors relativos al hip del frame 1
             anchors_rel: Dict[str, Dict[str, float]] = {}
             for name in OFFICIAL_ANCHOR_NAMES:
-                a_pos = self._get_anchor_pos(cur_skel, name, base_pelvis)
-                b_pos = self._get_anchor_pos(base_skel, name, base_pelvis)
+                a_pos = self._get_anchor_pos(cur_skel, name, base_hip)
+                b_pos = self._get_anchor_pos(base_skel, name, base_hip)
                 anchors_rel[name] = {
                     "dx": a_pos[0] - b_pos[0],
                     "dy": a_pos[1] - b_pos[1],
@@ -340,4 +436,5 @@ class TemplateExtractorV2:
         a = skel.get_anchor(name)
         if a is not None:
             return float(a.x), float(a.y)
+        logger.warning(f"TemplateExtractorV2: Anchor '{name}' ausente en Skeleton. Usando fallback explícito: {default}")
         return default
