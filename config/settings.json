@@ -2,12 +2,13 @@
   "app_name": "Villa del Chef - Sprite Studio",
   "version": "1.0.0",
   "dataset_version": "1.0.0",
+  "approved_dataset_root": "dataset/finished_characters/approved/personajes al 100%",
   "paths": {
     "dataset_root": "dataset",
-    "approved_characters": "dataset/finished_characters/approved",
+    "approved_characters": "dataset/finished_characters/approved/personajes al 100%",
     "rejected_characters": "dataset/finished_characters/rejected",
     "incoming_characters": "dataset/finished_characters/incoming",
-    "dataset_index": "dataset/dataset_index.json",
+    "dataset_index": "dataset/indexed/dataset_index.json",
     "indexed": "dataset/indexed",
     "normalized": "dataset/normalized",
     "extracted_frames": "dataset/extracted_frames",
@@ -25,9 +26,9 @@
   },
   "official_variants": ["rnormal", "rbchef", "rnchef"],
   "variant_labels": {
-    "rnormal": "Ropa Normal",
-    "rbchef": "Ropa Blanca Chef",
-    "rnchef": "Ropa Negra Chef"
+    "rnormal": "Ropa normal",
+    "rbchef": "Chef blanco",
+    "rnchef": "Chef negro"
   },
   "animation_rows": [
     "idle_down",

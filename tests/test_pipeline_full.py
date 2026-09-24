@@ -290,7 +290,7 @@ def test_acceptance_dataset_and_training_report(tmp_path: Path):
     variants = ["rnormal", "rbchef", "rnchef"]                 # 3 variantes
 
     dataset_root = tmp_path / "dataset"
-    approved_dir = dataset_root / "finished_characters" / "approved"
+    approved_dir = dataset_root / "finished_characters" / "approved" / "personajes al 100"
     approved_dir.mkdir(parents=True, exist_ok=True)
 
     for char in characters:

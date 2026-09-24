@@ -5,6 +5,7 @@ from PIL import Image
 
 from core.bbox_detector import BoundingBoxDetector
 from core.baseline_detector import BaselineDetector
+from core.guard import SourceDatasetGuard
 from models.frame import Frame
 
 logger = logging.getLogger("SpriteStudio.FrameNormalizer")
@@ -14,6 +15,7 @@ class FrameNormalizer:
     """
     Normaliza frames individuales a un canvas estándar preservando la fidelidad
     pixel-perfect (NEAREST), centrando horizontalmente y alineando pies a una baseline común.
+    Garantiza que todos los archivos se escriban FUERA del dataset original.
     """
 
     def __init__(
@@ -22,12 +24,14 @@ class FrameNormalizer:
         canvas_height: int = 192,
         baseline_offset_from_bottom: int = 16,
         output_base_dir: Optional[Path] = None,
+        guard: Optional[SourceDatasetGuard] = None
     ):
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
         self.target_baseline_y = canvas_height - baseline_offset_from_bottom
         self.target_center_x = canvas_width // 2
-        self.output_base_dir = Path(output_base_dir or "dataset/normalized")
+        self.output_base_dir = Path(output_base_dir or "dataset/normalized").resolve()
+        self.guard = guard
 
     def normalize_frame(
         self,
@@ -56,7 +60,6 @@ class FrameNormalizer:
             # 1. Detectar bbox del personaje
             bbox = BoundingBoxDetector.detect_sprite_bbox(img)
             if not bbox:
-                # Frame vacío
                 bbox = (0, 0, img.width, img.height)
                 sprite_crop = img
                 feet_y = img.height - 1
@@ -69,8 +72,7 @@ class FrameNormalizer:
 
             crop_w, crop_h = sprite_crop.size
 
-            # 2. Preservar aspect ratio y verificar si cabe en el canvas
-            scale = 1.0
+            # 2. Preservar aspect ratio (NEAREST siempre)
             max_avail_w = self.canvas_width - 8
             max_avail_h = self.target_baseline_y - 8
 
@@ -78,32 +80,36 @@ class FrameNormalizer:
                 scale = min(max_avail_w / crop_w, max_avail_h / crop_h)
                 new_w = max(1, int(round(crop_w * scale)))
                 new_h = max(1, int(round(crop_h * scale)))
-                # Pixel perfect: NUNCA bilineal, SIEMPRE NEAREST
                 sprite_crop = sprite_crop.resize((new_w, new_h), resample=Image.Resampling.NEAREST)
                 crop_w, crop_h = sprite_crop.size
                 center_x_sprite = crop_w // 2
                 feet_y = crop_h - 1
 
-            # 3 & 4 & 5 & 6. Crear canvas estándar transparente y situar personaje
+            # 3, 4, 5, 6. Canvas estándar transparente
             canvas = Image.new("RGBA", (self.canvas_width, self.canvas_height), (0, 0, 0, 0))
-
             paste_x = int(self.target_center_x - center_x_sprite)
             paste_y = int(self.target_baseline_y - feet_y)
 
-            # 7. Mantener transparencia utilizando el sprite_crop como máscara
+            # 7. Mantener transparencia
             canvas.paste(sprite_crop, (paste_x, paste_y), mask=sprite_crop)
 
-            # Determinar ruta de salida
+            # Determinar ruta de salida fuera del source
             if custom_output_path:
-                out_file = custom_output_path
+                out_file = Path(custom_output_path).resolve()
             elif character_id and variant and animation_name:
                 out_dir = self.output_base_dir / character_id / variant / animation_name
                 out_dir.mkdir(parents=True, exist_ok=True)
                 out_file = out_dir / f"{frame_idx:02d}.png"
             else:
-                out_dir = input_path.parent / "normalized"
+                out_dir = self.output_base_dir / (character_id or "unassigned") / (variant or "default")
                 out_dir.mkdir(parents=True, exist_ok=True)
                 out_file = out_dir / input_path.name
+
+            out_file = out_file.resolve()
+
+            # Asegurar que NO se escriba dentro del dataset protegido
+            if self.guard:
+                self.guard.assert_can_write(out_file, operation_desc="normalización de frames")
 
             out_file.parent.mkdir(parents=True, exist_ok=True)
             canvas.save(out_file, "PNG")

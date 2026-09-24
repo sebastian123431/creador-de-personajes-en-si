@@ -27,12 +27,14 @@ def test_main_window_init(qapp, sample_dataset_dir: Path, tmp_path: Path):
     assert window is not None
     assert window.windowTitle() == "Villa del Chef - Sprite Studio"
 
-    # Verificar que los paneles estén poblados
-    assert window.dataset_panel.approved_list.count() == 6
+    # Verificar que el árbol esté poblado
+    assert window.dataset_panel.tree.topLevelItemCount() == 1
+    root_node = window.dataset_panel.tree.topLevelItem(0)
+    assert root_node.childCount() == 6
 
-    # Simular selección de un personaje
-    item = window.dataset_panel.approved_list.item(0)
-    window.dataset_panel.approved_list.itemClicked.emit(item)
+    # Simular selección de un personaje en el árbol
+    item = root_node.child(0)
+    window.dataset_panel.tree.itemClicked.emit(item, 0)
 
     char = window.character_panel.current_character
     assert char is not None
