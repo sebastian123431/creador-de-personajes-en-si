@@ -49,6 +49,242 @@ class PoseAnalyzerV2:
 
         return widths, centers_x
 
+    @staticmethod
+    def normalize_orientation(orientation: str) -> str:
+        s = orientation.lower()
+        if "down" in s:
+            return "down"
+        elif "up" in s:
+            return "up"
+        elif "left" in s:
+            return "left"
+        elif "right" in s:
+            return "right"
+        return "down"
+
+    def _analyze_down(
+        self, widths: np.ndarray, centers_x: np.ndarray,
+        min_x: int, min_y: int, max_x: int, max_y: int,
+        char_w: int, char_h: int
+    ) -> Dict[str, Tuple[int, int, float]]:
+        neck_search_start = int(char_h * 0.20)
+        neck_search_end = max(neck_search_start + 1, int(char_h * 0.42))
+        neck_idx = neck_search_start + int(np.argmin(widths[neck_search_start:neck_search_end]))
+        neck_y = min_y + neck_idx
+        neck_x = int(round(centers_x[neck_idx]))
+
+        head_y = min_y + max(2, int((neck_y - min_y) * 0.45))
+        head_x = int(round(np.mean(centers_x[:neck_idx]))) if neck_idx > 0 else (min_x + max_x) // 2
+
+        chest_y = int(neck_y + char_h * 0.12)
+        chest_x = int(round(centers_x[min(len(centers_x) - 1, neck_idx + int(char_h * 0.12))]))
+
+        shoulder_y = int(neck_y + char_h * 0.06)
+        shoulder_span = max(2, int(char_w * 0.32))
+        l_shoulder_x = max(min_x, chest_x - shoulder_span)
+        r_shoulder_x = min(max_x, chest_x + shoulder_span)
+
+        elbow_y = int(neck_y + char_h * 0.22)
+        elbow_span = max(3, int(char_w * 0.40))
+        l_elbow_x = max(min_x, chest_x - elbow_span)
+        r_elbow_x = min(max_x, chest_x + elbow_span)
+
+        wrist_y = int(neck_y + char_h * 0.32)
+        wrist_span = max(3, int(char_w * 0.38))
+        l_wrist_x = max(min_x, chest_x - wrist_span)
+        r_wrist_x = min(max_x, chest_x + wrist_span)
+
+        hand_y = int(neck_y + char_h * 0.40)
+        hand_span = max(3, int(char_w * 0.38))
+        l_hand_x = max(min_x, chest_x - hand_span)
+        r_hand_x = min(max_x, chest_x + hand_span)
+
+        hip_y = int(neck_y + char_h * 0.35)
+        hip_x = chest_x
+
+        knee_y = int(hip_y + (max_y - hip_y) * 0.42)
+        knee_span = max(2, int(char_w * 0.18))
+        l_knee_x = max(min_x, hip_x - knee_span)
+        r_knee_x = min(max_x, hip_x + knee_span)
+
+        ankle_y = int(max_y - max(2, int(char_h * 0.06)))
+        ankle_span = max(2, int(char_w * 0.22))
+        l_ankle_x = max(min_x, hip_x - ankle_span)
+        r_ankle_x = min(max_x, hip_x + ankle_span)
+
+        foot_y = int(max_y)
+        foot_span = max(2, int(char_w * 0.22))
+        l_foot_x = max(min_x, hip_x - foot_span)
+        r_foot_x = min(max_x, hip_x + foot_span)
+
+        return {
+            "head": (head_x, head_y, 0.95),
+            "neck": (neck_x, neck_y, 0.90),
+            "left_shoulder": (l_shoulder_x, shoulder_y, 0.85),
+            "right_shoulder": (r_shoulder_x, shoulder_y, 0.85),
+            "left_elbow": (l_elbow_x, elbow_y, 0.80),
+            "right_elbow": (r_elbow_x, elbow_y, 0.80),
+            "left_wrist": (l_wrist_x, wrist_y, 0.78),
+            "right_wrist": (r_wrist_x, wrist_y, 0.78),
+            "left_hand": (l_hand_x, hand_y, 0.75),
+            "right_hand": (r_hand_x, hand_y, 0.75),
+            "chest": (chest_x, chest_y, 0.92),
+            "hip": (hip_x, hip_y, 0.88),
+            "left_knee": (l_knee_x, knee_y, 0.82),
+            "right_knee": (r_knee_x, knee_y, 0.82),
+            "left_ankle": (l_ankle_x, ankle_y, 0.85),
+            "right_ankle": (r_ankle_x, ankle_y, 0.85),
+            "left_foot": (l_foot_x, foot_y, 0.92),
+            "right_foot": (r_foot_x, foot_y, 0.92),
+        }
+
+    def _analyze_up(
+        self, widths: np.ndarray, centers_x: np.ndarray,
+        min_x: int, min_y: int, max_x: int, max_y: int,
+        char_w: int, char_h: int
+    ) -> Dict[str, Tuple[int, int, float]]:
+        # Vista trasera: silueta posterior, sin asumir facciones frontales
+        down_anchors = self._analyze_down(widths, centers_x, min_x, min_y, max_x, max_y, char_w, char_h)
+        down_anchors["head"] = (down_anchors["head"][0], down_anchors["head"][1], 0.90)
+        down_anchors["chest"] = (down_anchors["chest"][0], down_anchors["chest"][1], 0.88)
+        return down_anchors
+
+    def _analyze_left(
+        self, widths: np.ndarray, centers_x: np.ndarray,
+        min_x: int, min_y: int, max_x: int, max_y: int,
+        char_w: int, char_h: int
+    ) -> Dict[str, Tuple[int, int, float]]:
+        # Perfil izquierdo: Lado izquierdo en primer plano (visible), lado derecho ocluido detrás
+        cx = int((min_x + max_x) // 2)
+        neck_y = min_y + int(char_h * 0.30)
+        neck_x = cx - int(char_w * 0.05)
+
+        head_y = min_y + max(2, int(char_h * 0.14))
+        head_x = min_x + int(char_w * 0.40)  # Mirando hacia la izquierda
+
+        chest_y = int(neck_y + char_h * 0.12)
+        chest_x = cx
+        hip_y = int(neck_y + char_h * 0.35)
+        hip_x = cx
+
+        # Brazo izquierdo (primer plano / visible)
+        l_shoulder_x = max(min_x, cx - int(char_w * 0.15))
+        shoulder_y = int(neck_y + char_h * 0.06)
+        l_elbow_x = max(min_x, cx - int(char_w * 0.25))
+        elbow_y = int(neck_y + char_h * 0.22)
+        l_wrist_x = max(min_x, cx - int(char_w * 0.28))
+        wrist_y = int(neck_y + char_h * 0.32)
+        l_hand_x = max(min_x, cx - int(char_w * 0.30))
+        hand_y = int(neck_y + char_h * 0.40)
+
+        # Brazo derecho (ocluido detrás del torso -> baja confianza ~0.35)
+        r_shoulder_x = cx + int(char_w * 0.05)
+        r_elbow_x = cx + int(char_w * 0.05)
+        r_wrist_x = cx + int(char_w * 0.05)
+        r_hand_x = cx + int(char_w * 0.05)
+
+        # Piernas
+        knee_y = int(hip_y + (max_y - hip_y) * 0.42)
+        l_knee_x = cx - int(char_w * 0.10)
+        r_knee_x = cx + int(char_w * 0.06)
+
+        ankle_y = int(max_y - max(2, int(char_h * 0.06)))
+        l_ankle_x = cx - int(char_w * 0.12)
+        r_ankle_x = cx + int(char_w * 0.06)
+
+        foot_y = int(max_y)
+        l_foot_x = cx - int(char_w * 0.18)
+        r_foot_x = cx + int(char_w * 0.04)
+
+        return {
+            "head": (head_x, head_y, 0.90),
+            "neck": (neck_x, neck_y, 0.88),
+            "left_shoulder": (l_shoulder_x, shoulder_y, 0.88),
+            "right_shoulder": (r_shoulder_x, shoulder_y, 0.35),
+            "left_elbow": (l_elbow_x, elbow_y, 0.85),
+            "right_elbow": (r_elbow_x, elbow_y, 0.35),
+            "left_wrist": (l_wrist_x, wrist_y, 0.82),
+            "right_wrist": (r_wrist_x, wrist_y, 0.35),
+            "left_hand": (l_hand_x, hand_y, 0.80),
+            "right_hand": (r_hand_x, hand_y, 0.35),
+            "chest": (chest_x, chest_y, 0.90),
+            "hip": (hip_x, hip_y, 0.88),
+            "left_knee": (l_knee_x, knee_y, 0.85),
+            "right_knee": (r_knee_x, knee_y, 0.40),
+            "left_ankle": (l_ankle_x, ankle_y, 0.85),
+            "right_ankle": (r_ankle_x, ankle_y, 0.40),
+            "left_foot": (l_foot_x, foot_y, 0.90),
+            "right_foot": (r_foot_x, foot_y, 0.40),
+        }
+
+    def _analyze_right(
+        self, widths: np.ndarray, centers_x: np.ndarray,
+        min_x: int, min_y: int, max_x: int, max_y: int,
+        char_w: int, char_h: int
+    ) -> Dict[str, Tuple[int, int, float]]:
+        # Perfil derecho: Lado derecho en primer plano (visible), lado izquierdo ocluido detrás
+        cx = int((min_x + max_x) // 2)
+        neck_y = min_y + int(char_h * 0.30)
+        neck_x = cx + int(char_w * 0.05)
+
+        head_y = min_y + max(2, int(char_h * 0.14))
+        head_x = min_x + int(char_w * 0.60)  # Mirando hacia la derecha
+
+        chest_y = int(neck_y + char_h * 0.12)
+        chest_x = cx
+        hip_y = int(neck_y + char_h * 0.35)
+        hip_x = cx
+
+        # Brazo derecho (primer plano / visible)
+        r_shoulder_x = min(max_x, cx + int(char_w * 0.15))
+        shoulder_y = int(neck_y + char_h * 0.06)
+        r_elbow_x = min(max_x, cx + int(char_w * 0.25))
+        elbow_y = int(neck_y + char_h * 0.22)
+        r_wrist_x = min(max_x, cx + int(char_w * 0.28))
+        wrist_y = int(neck_y + char_h * 0.32)
+        r_hand_x = min(max_x, cx + int(char_w * 0.30))
+        hand_y = int(neck_y + char_h * 0.40)
+
+        # Brazo izquierdo (ocluido detrás del torso -> baja confianza ~0.35)
+        l_shoulder_x = cx - int(char_w * 0.05)
+        l_elbow_x = cx - int(char_w * 0.05)
+        l_wrist_x = cx - int(char_w * 0.05)
+        l_hand_x = cx - int(char_w * 0.05)
+
+        # Piernas
+        knee_y = int(hip_y + (max_y - hip_y) * 0.42)
+        r_knee_x = cx + int(char_w * 0.10)
+        l_knee_x = cx - int(char_w * 0.06)
+
+        ankle_y = int(max_y - max(2, int(char_h * 0.06)))
+        r_ankle_x = cx + int(char_w * 0.12)
+        l_ankle_x = cx - int(char_w * 0.06)
+
+        foot_y = int(max_y)
+        r_foot_x = cx + int(char_w * 0.18)
+        l_foot_x = cx - int(char_w * 0.04)
+
+        return {
+            "head": (head_x, head_y, 0.90),
+            "neck": (neck_x, neck_y, 0.88),
+            "left_shoulder": (l_shoulder_x, shoulder_y, 0.35),
+            "right_shoulder": (r_shoulder_x, shoulder_y, 0.88),
+            "left_elbow": (l_elbow_x, elbow_y, 0.35),
+            "right_elbow": (r_elbow_x, elbow_y, 0.85),
+            "left_wrist": (l_wrist_x, wrist_y, 0.35),
+            "right_wrist": (r_wrist_x, wrist_y, 0.82),
+            "left_hand": (l_hand_x, hand_y, 0.35),
+            "right_hand": (r_hand_x, hand_y, 0.80),
+            "chest": (chest_x, chest_y, 0.90),
+            "hip": (hip_x, hip_y, 0.88),
+            "left_knee": (l_knee_x, knee_y, 0.40),
+            "right_knee": (r_knee_x, knee_y, 0.85),
+            "left_ankle": (l_ankle_x, ankle_y, 0.40),
+            "right_ankle": (r_ankle_x, ankle_y, 0.85),
+            "left_foot": (l_foot_x, foot_y, 0.40),
+            "right_foot": (r_foot_x, foot_y, 0.90),
+        }
+
     def analyze_pose(
         self,
         image_or_path: Union[Image.Image, Path, str],
@@ -96,83 +332,16 @@ class PoseAnalyzerV2:
         # 1. Perfil de ancho horizontal y centro medial
         widths, centers_x = self._compute_width_profile(mask, min_y, max_y)
 
-        # 2. Localizar estrechamiento del cuello (mínimo de anchura entre 20% y 40% de altura)
-        neck_search_start = int(char_h * 0.20)
-        neck_search_end = max(neck_search_start + 1, int(char_h * 0.42))
-        neck_idx = neck_search_start + int(np.argmin(widths[neck_search_start:neck_search_end]))
-        neck_y = min_y + neck_idx
-        neck_x = int(round(centers_x[neck_idx]))
-
-        # 3. Cabeza (arriba del cuello)
-        head_y = min_y + max(2, int((neck_y - min_y) * 0.45))
-        head_x = int(round(np.mean(centers_x[:neck_idx]))) if neck_idx > 0 else (min_x + max_x) // 2
-
-        # 4. Hombros y Pecho (debajo del cuello)
-        chest_y = int(neck_y + char_h * 0.12)
-        chest_x = int(round(centers_x[min(len(centers_x) - 1, neck_idx + int(char_h * 0.12))]))
-
-        shoulder_y = int(neck_y + char_h * 0.06)
-        shoulder_span = max(2, int(char_w * 0.32))
-        l_shoulder_x = max(min_x, chest_x - shoulder_span)
-        r_shoulder_x = min(max_x, chest_x + shoulder_span)
-
-        # 5. Codos, Muñecas y Manos
-        elbow_y = int(neck_y + char_h * 0.22)
-        elbow_span = max(3, int(char_w * 0.40))
-        l_elbow_x = max(min_x, chest_x - elbow_span)
-        r_elbow_x = min(max_x, chest_x + elbow_span)
-
-        wrist_y = int(neck_y + char_h * 0.32)
-        wrist_span = max(3, int(char_w * 0.38))
-        l_wrist_x = max(min_x, chest_x - wrist_span)
-        r_wrist_x = min(max_x, chest_x + wrist_span)
-
-        hand_y = int(neck_y + char_h * 0.40)
-        hand_span = max(3, int(char_w * 0.38))
-        l_hand_x = max(min_x, chest_x - hand_span)
-        r_hand_x = min(max_x, chest_x + hand_span)
-
-        # 6. Cadera (entre pecho y piernas)
-        hip_y = int(neck_y + char_h * 0.35)
-        hip_x = chest_x
-
-        # 7. Rodillas, Tobillos y Pies
-        knee_y = int(hip_y + (max_y - hip_y) * 0.42)
-        knee_span = max(2, int(char_w * 0.18))
-        l_knee_x = max(min_x, hip_x - knee_span)
-        r_knee_x = min(max_x, hip_x + knee_span)
-
-        ankle_y = int(max_y - max(2, int(char_h * 0.06)))
-        ankle_span = max(2, int(char_w * 0.22))
-        l_ankle_x = max(min_x, hip_x - ankle_span)
-        r_ankle_x = min(max_x, hip_x + ankle_span)
-
-        foot_y = int(max_y)
-        foot_span = max(2, int(char_w * 0.22))
-        l_foot_x = max(min_x, hip_x - foot_span)
-        r_foot_x = min(max_x, hip_x + foot_span)
-
-        # Asignar coordenadas iniciales estimadas por V2 con confidence evaluado
-        v2_anchors = {
-            "head": (head_x, head_y, 0.95),
-            "neck": (neck_x, neck_y, 0.90),
-            "left_shoulder": (l_shoulder_x, shoulder_y, 0.85),
-            "right_shoulder": (r_shoulder_x, shoulder_y, 0.85),
-            "left_elbow": (l_elbow_x, elbow_y, 0.80),
-            "right_elbow": (r_elbow_x, elbow_y, 0.80),
-            "left_wrist": (l_wrist_x, wrist_y, 0.78),
-            "right_wrist": (r_wrist_x, wrist_y, 0.78),
-            "left_hand": (l_hand_x, hand_y, 0.75),
-            "right_hand": (r_hand_x, hand_y, 0.75),
-            "chest": (chest_x, chest_y, 0.92),
-            "hip": (hip_x, hip_y, 0.88),
-            "left_knee": (l_knee_x, knee_y, 0.82),
-            "right_knee": (r_knee_x, knee_y, 0.82),
-            "left_ankle": (l_ankle_x, ankle_y, 0.85),
-            "right_ankle": (r_ankle_x, ankle_y, 0.85),
-            "left_foot": (l_foot_x, foot_y, 0.92),
-            "right_foot": (r_foot_x, foot_y, 0.92),
-        }
+        # 2. Despachar a análisis especializado por orientación
+        norm_orient = self.normalize_orientation(orientation)
+        if norm_orient == "up":
+            v2_anchors = self._analyze_up(widths, centers_x, min_x, min_y, max_x, max_y, char_w, char_h)
+        elif norm_orient == "left":
+            v2_anchors = self._analyze_left(widths, centers_x, min_x, min_y, max_x, max_y, char_w, char_h)
+        elif norm_orient == "right":
+            v2_anchors = self._analyze_right(widths, centers_x, min_x, min_y, max_x, max_y, char_w, char_h)
+        else:
+            v2_anchors = self._analyze_down(widths, centers_x, min_x, min_y, max_x, max_y, char_w, char_h)
 
         # Aplicar orden de prioridad estricto para cada uno de los 18 anchors:
         for name in OFFICIAL_ANCHOR_NAMES:

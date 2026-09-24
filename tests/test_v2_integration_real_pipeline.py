@@ -297,3 +297,139 @@ def test_head_identity_integrity(tmp_path):
     # Verificar que los píxeles visibles de la cabeza se preserven idénticos
     vis_mask = orig_arr[:, :, 3] > 0
     assert np.all(orig_arr[vis_mask] == gen_arr[vis_mask])
+
+
+# ==============================================================================
+# PRUEBAS FASE 1 - ENTRENAMIENTO ARTICULADO V2
+# ==============================================================================
+
+def test_articulated_template_contains_subparts(tmp_path):
+    """
+    CRÍTICO: Verifica que build_articulated_template preserve todas las 18 partes
+    y subpartes anatómicas en el JSON final y no colapse solo a partes mayores:
+    - left_upper_arm, left_forearm, left_hand
+    - right_upper_arm, right_forearm, right_hand
+    - left_thigh, left_lower_leg, left_foot
+    - right_thigh, right_lower_leg, right_foot
+    - head, torso, left_arm, right_arm, left_leg, right_leg
+    """
+    extractor = TemplateExtractorV2(base_templates_dir=tmp_path / "tpl")
+    cycle1 = _create_synthetic_walk_cycle()
+    cycle2 = _create_synthetic_walk_cycle()
+
+    template = extractor.build_articulated_template("walk_down", [cycle1, cycle2])
+    assert template.frame_count == 4
+
+    required_subparts = [
+        "left_upper_arm", "left_forearm", "left_hand",
+        "right_upper_arm", "right_forearm", "right_hand",
+        "left_thigh", "left_lower_leg", "left_foot",
+        "right_thigh", "right_lower_leg", "right_foot",
+        "head", "torso", "left_arm", "right_arm", "left_leg", "right_leg",
+    ]
+
+    for frame in template.frames:
+        for part_name in required_subparts:
+            assert part_name in frame.parts, f"Subparte faltante en frame {frame.frame_index}: {part_name}"
+            part = frame.parts[part_name]
+            assert hasattr(part, "dx")
+            assert hasattr(part, "dy")
+            assert hasattr(part, "dx_ratio")
+            assert hasattr(part, "dy_ratio")
+            assert hasattr(part, "angle_deg")
+
+    # Guardar a disco y verificar estructura JSON
+    saved_path = extractor.save_template(template)
+    with open(saved_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    frame1_parts = data["frames"][0]["parts"]
+    for part_name in required_subparts:
+        assert part_name in frame1_parts, f"Subparte {part_name} no encontrada en JSON serializado!"
+        assert "dx_ratio" in frame1_parts[part_name]
+        assert "dy_ratio" in frame1_parts[part_name]
+
+
+def test_ratios_are_saved(tmp_path):
+    """
+    Verifica que las razones relativas de desplazamiento (dx_ratio, dy_ratio,
+    root_dx_ratio, root_dy_ratio) se calculen, serialicen y deserialicen correctamente.
+    """
+    extractor = TemplateExtractorV2(base_templates_dir=tmp_path / "tpl")
+    cycle = _create_synthetic_walk_cycle()
+
+    template = extractor.build_articulated_template("walk_down", [cycle])
+    f1 = template.get_frame(1)
+    assert f1 is not None
+    assert hasattr(f1, "root_dx_ratio")
+    assert hasattr(f1, "root_dy_ratio")
+
+    saved_path = extractor.save_template(template)
+    loaded_template = extractor.load_template("walk_down")
+    assert loaded_template is not None
+    lf1 = loaded_template.get_frame(1)
+    assert lf1 is not None
+    assert isinstance(lf1.root_dx_ratio, float)
+    assert isinstance(lf1.parts["left_upper_arm"].dx_ratio, float)
+
+
+def test_orientation_specific_pose():
+    """
+    Verifica que PoseAnalyzerV2 maneje adecuadamente las siluetas por orientación:
+    - left: extremidades derechas (ocluidas) deben tener baja confianza (~0.35).
+    - right: extremidades izquierdas (ocluidas) deben tener baja confianza (~0.35).
+    - down / up: extremidades simétricas con confianza alta (> 0.75).
+    """
+    from core.pose_analyzer_v2 import PoseAnalyzerV2
+    analyzer = PoseAnalyzerV2()
+
+    # Imagen de prueba sintética 64x96
+    img = Image.new("RGBA", (64, 96), (0, 0, 0, 0))
+    # Dibujar silueta simple en el centro
+    arr = np.zeros((96, 64, 4), dtype=np.uint8)
+    arr[16:80, 20:44] = [200, 150, 100, 255]
+    img = Image.fromarray(arr, mode="RGBA")
+
+    skel_left = analyzer.analyze_pose(img, orientation="left")
+    assert skel_left.get_anchor("right_shoulder").confidence <= 0.40
+    assert skel_left.get_anchor("right_elbow").confidence <= 0.40
+    assert skel_left.get_anchor("left_shoulder").confidence >= 0.75
+
+    skel_right = analyzer.analyze_pose(img, orientation="right")
+    assert skel_right.get_anchor("left_shoulder").confidence <= 0.40
+    assert skel_right.get_anchor("left_elbow").confidence <= 0.40
+    assert skel_right.get_anchor("right_shoulder").confidence >= 0.75
+
+    skel_down = analyzer.analyze_pose(img, orientation="down")
+    assert skel_down.get_anchor("left_shoulder").confidence >= 0.75
+    assert skel_down.get_anchor("right_shoulder").confidence >= 0.75
+
+
+def test_low_confidence_excluded(tmp_path):
+    """
+    Verifica que secuencias con confianza < 0.60 sean marcadas como REVIEW_REQUIRED
+    y no contaminen la agregación cuando existen secuencias limpias.
+    """
+    extractor = TemplateExtractorV2(base_templates_dir=tmp_path / "tpl")
+
+    # Ciclo limpio (alta confianza 0.95)
+    clean_cycle = _create_synthetic_walk_cycle()
+    for skel in clean_cycle:
+        for a in skel.anchors.values():
+            a.confidence = 0.95
+
+    # Ciclo ruidoso / de baja confianza (< 0.60) con desplazamientos absurdos (outlier contaminante)
+    noisy_cycle = _create_synthetic_walk_cycle()
+    for skel in noisy_cycle:
+        for a in skel.anchors.values():
+            a.confidence = 0.45  # < 0.60 REVIEW_REQUIRED
+        # Desplazamiento distorsionado extremo
+        skel.set_anchor("left_hand", 100, 100, confidence=0.45)
+
+    template = extractor.build_articulated_template("walk_down", [clean_cycle, noisy_cycle])
+    # La secuencia ruidosa debió ser excluida de la agregación primaria
+    assert template.samples_used == 1
+    # La mano izquierda no debió contaminarse con las coordenadas de la secuencia de baja confianza
+    f1 = template.get_frame(1)
+    assert abs(f1.parts["left_hand"].dx) < 20.0
+

@@ -1,0 +1,15 @@
+{
+    "offline_mode": true,
+    "min_anchor_confidence": 0.60,
+    "preferred_anchor_confidence": 0.75,
+    "use_manual_annotations": true,
+    "use_temporal_tracking": true,
+    "use_mad_outlier_filter": true,
+    "incremental_training": true,
+    "save_debug_samples": true,
+    "debug_samples_per_animation": 3,
+    "random_seed": 42,
+    "template_version": "2.2",
+    "pose_analyzer_version": "2.2",
+    "force_rebuild": false
+}

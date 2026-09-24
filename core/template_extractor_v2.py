@@ -90,7 +90,24 @@ class TemplateExtractorV2:
         base_skel = skeletons[0]
         base_hip = self._get_anchor_pos(base_skel, "hip", (32.0, 48.0))
 
+        # Estimar dimensiones de silueta a partir de base_skel para normalización relativa
+        xs = [a.x for a in base_skel.anchors.values() if a.confidence > 0]
+        ys = [a.y for a in base_skel.anchors.values() if a.confidence > 0]
+        char_w = float(max(xs) - min(xs)) if xs and max(xs) > min(xs) else 32.0
+        char_h = float(max(ys) - min(ys)) if ys and max(ys) > min(ys) else 64.0
+        char_w = max(char_w, 1.0)
+        char_h = max(char_h, 1.0)
+
         sequence_data = []
+
+        def _make_part_kinematics(dx: float, dy: float, angle_deg: float) -> Dict[str, float]:
+            return {
+                "dx": float(dx),
+                "dy": float(dy),
+                "dx_ratio": float(dx / char_w),
+                "dy_ratio": float(dy / char_h),
+                "angle_deg": float(angle_deg),
+            }
 
         for frame_idx, cur_skel in enumerate(skeletons, start=1):
             cur_hip = self._get_anchor_pos(cur_skel, "hip", (32.0, 48.0))
@@ -109,22 +126,22 @@ class TemplateExtractorV2:
             cur_head_ang = _calculate_segment_angle_deg(c_neck, c_head)
             d_theta_head = _normalize_angle_deg(cur_head_ang - base_head_ang)
 
-            parts_kinematics["head"] = {
-                "dx": (c_head[0] - c_neck[0]) - (b_head[0] - b_neck[0]),
-                "dy": (c_head[1] - c_neck[1]) - (b_head[1] - b_neck[1]),
-                "angle_deg": d_theta_head,
-            }
+            parts_kinematics["head"] = _make_part_kinematics(
+                dx=(c_head[0] - c_neck[0]) - (b_head[0] - b_neck[0]),
+                dy=(c_head[1] - c_neck[1]) - (b_head[1] - b_neck[1]),
+                angle_deg=d_theta_head,
+            )
 
             # 2. Torso (eje hip -> neck)
             base_torso_ang = _calculate_segment_angle_deg(base_hip, b_neck)
             cur_torso_ang = _calculate_segment_angle_deg(cur_hip, c_neck)
             d_theta_torso = _normalize_angle_deg(cur_torso_ang - base_torso_ang)
 
-            parts_kinematics["torso"] = {
-                "dx": root_dx,
-                "dy": root_dy,
-                "angle_deg": d_theta_torso,
-            }
+            parts_kinematics["torso"] = _make_part_kinematics(
+                dx=root_dx,
+                dy=root_dy,
+                angle_deg=d_theta_torso,
+            )
 
             # 3. Brazo izquierdo completo y subcadenas (shoulder -> elbow -> wrist -> hand)
             b_ls = self._get_anchor_pos(base_skel, "left_shoulder", (20.0, 28.0))
@@ -140,32 +157,32 @@ class TemplateExtractorV2:
             cur_la_ang = _calculate_segment_angle_deg(c_ls, c_lh)
             d_theta_la = _normalize_angle_deg(cur_la_ang - base_la_ang)
 
-            parts_kinematics["left_arm"] = {
-                "dx": (c_lh[0] - c_ls[0]) - (b_lh[0] - b_ls[0]),
-                "dy": (c_lh[1] - c_ls[1]) - (b_lh[1] - b_ls[1]),
-                "angle_deg": d_theta_la,
-            }
+            parts_kinematics["left_arm"] = _make_part_kinematics(
+                dx=(c_lh[0] - c_ls[0]) - (b_lh[0] - b_ls[0]),
+                dy=(c_lh[1] - c_ls[1]) - (b_lh[1] - b_ls[1]),
+                angle_deg=d_theta_la,
+            )
 
             # Subpartes anatómicas del brazo izquierdo
             d_theta_l_upper = _normalize_angle_deg(_calculate_segment_angle_deg(c_ls, c_le) - _calculate_segment_angle_deg(b_ls, b_le))
             d_theta_l_fore = _normalize_angle_deg(_calculate_segment_angle_deg(c_le, c_lw) - _calculate_segment_angle_deg(b_le, b_lw))
             d_theta_l_hand = _normalize_angle_deg(_calculate_segment_angle_deg(c_lw, c_lh) - _calculate_segment_angle_deg(b_lw, b_lh))
 
-            parts_kinematics["left_upper_arm"] = {
-                "dx": (c_le[0] - c_ls[0]) - (b_le[0] - b_ls[0]),
-                "dy": (c_le[1] - c_ls[1]) - (b_le[1] - b_ls[1]),
-                "angle_deg": d_theta_l_upper,
-            }
-            parts_kinematics["left_forearm"] = {
-                "dx": (c_lw[0] - c_le[0]) - (b_lw[0] - b_le[0]),
-                "dy": (c_lw[1] - c_le[1]) - (b_lw[1] - b_le[1]),
-                "angle_deg": d_theta_l_fore,
-            }
-            parts_kinematics["left_hand"] = {
-                "dx": (c_lh[0] - c_lw[0]) - (b_lh[0] - b_lw[0]),
-                "dy": (c_lh[1] - c_lw[1]) - (b_lh[1] - b_lw[1]),
-                "angle_deg": d_theta_l_hand,
-            }
+            parts_kinematics["left_upper_arm"] = _make_part_kinematics(
+                dx=(c_le[0] - c_ls[0]) - (b_le[0] - b_ls[0]),
+                dy=(c_le[1] - c_ls[1]) - (b_le[1] - b_ls[1]),
+                angle_deg=d_theta_l_upper,
+            )
+            parts_kinematics["left_forearm"] = _make_part_kinematics(
+                dx=(c_lw[0] - c_le[0]) - (b_lw[0] - b_le[0]),
+                dy=(c_lw[1] - c_le[1]) - (b_lw[1] - b_le[1]),
+                angle_deg=d_theta_l_fore,
+            )
+            parts_kinematics["left_hand"] = _make_part_kinematics(
+                dx=(c_lh[0] - c_lw[0]) - (b_lh[0] - b_lw[0]),
+                dy=(c_lh[1] - c_lw[1]) - (b_lh[1] - b_lw[1]),
+                angle_deg=d_theta_l_hand,
+            )
 
             # 4. Brazo derecho completo y subcadenas (shoulder -> elbow -> wrist -> hand)
             b_rs = self._get_anchor_pos(base_skel, "right_shoulder", (44.0, 28.0))
@@ -181,32 +198,32 @@ class TemplateExtractorV2:
             cur_ra_ang = _calculate_segment_angle_deg(c_rs, c_rh)
             d_theta_ra = _normalize_angle_deg(cur_ra_ang - base_ra_ang)
 
-            parts_kinematics["right_arm"] = {
-                "dx": (c_rh[0] - c_rs[0]) - (b_rh[0] - b_rs[0]),
-                "dy": (c_rh[1] - c_rs[1]) - (b_rh[1] - b_rs[1]),
-                "angle_deg": d_theta_ra,
-            }
+            parts_kinematics["right_arm"] = _make_part_kinematics(
+                dx=(c_rh[0] - c_rs[0]) - (b_rh[0] - b_rs[0]),
+                dy=(c_rh[1] - c_rs[1]) - (b_rh[1] - b_rs[1]),
+                angle_deg=d_theta_ra,
+            )
 
             # Subpartes anatómicas del brazo derecho
             d_theta_r_upper = _normalize_angle_deg(_calculate_segment_angle_deg(c_rs, c_re) - _calculate_segment_angle_deg(b_rs, b_re))
             d_theta_r_fore = _normalize_angle_deg(_calculate_segment_angle_deg(c_re, c_rw) - _calculate_segment_angle_deg(b_re, b_rw))
             d_theta_r_hand = _normalize_angle_deg(_calculate_segment_angle_deg(c_rw, c_rh) - _calculate_segment_angle_deg(b_rw, b_rh))
 
-            parts_kinematics["right_upper_arm"] = {
-                "dx": (c_re[0] - c_rs[0]) - (b_re[0] - b_rs[0]),
-                "dy": (c_re[1] - c_rs[1]) - (b_re[1] - b_rs[1]),
-                "angle_deg": d_theta_r_upper,
-            }
-            parts_kinematics["right_forearm"] = {
-                "dx": (c_rw[0] - c_re[0]) - (b_rw[0] - b_re[0]),
-                "dy": (c_rw[1] - c_re[1]) - (b_rw[1] - b_re[1]),
-                "angle_deg": d_theta_r_fore,
-            }
-            parts_kinematics["right_hand"] = {
-                "dx": (c_rh[0] - c_rw[0]) - (b_rh[0] - b_rw[0]),
-                "dy": (c_rh[1] - c_rw[1]) - (b_rh[1] - b_rw[1]),
-                "angle_deg": d_theta_r_hand,
-            }
+            parts_kinematics["right_upper_arm"] = _make_part_kinematics(
+                dx=(c_re[0] - c_rs[0]) - (b_re[0] - b_rs[0]),
+                dy=(c_re[1] - c_rs[1]) - (b_re[1] - b_rs[1]),
+                angle_deg=d_theta_r_upper,
+            )
+            parts_kinematics["right_forearm"] = _make_part_kinematics(
+                dx=(c_rw[0] - c_re[0]) - (b_rw[0] - b_re[0]),
+                dy=(c_rw[1] - c_re[1]) - (b_rw[1] - b_re[1]),
+                angle_deg=d_theta_r_fore,
+            )
+            parts_kinematics["right_hand"] = _make_part_kinematics(
+                dx=(c_rh[0] - c_rw[0]) - (b_rh[0] - b_rw[0]),
+                dy=(c_rh[1] - c_rw[1]) - (b_rh[1] - b_rw[1]),
+                angle_deg=d_theta_r_hand,
+            )
 
             # 5. Pierna izquierda completa y subcadenas (hip -> knee -> ankle -> foot)
             b_lk = self._get_anchor_pos(base_skel, "left_knee", (24.0, 62.0))
@@ -220,32 +237,32 @@ class TemplateExtractorV2:
             cur_lleg_ang = _calculate_segment_angle_deg(cur_hip, c_lfoot)
             d_theta_lleg = _normalize_angle_deg(cur_lleg_ang - base_lleg_ang)
 
-            parts_kinematics["left_leg"] = {
-                "dx": (c_lfoot[0] - cur_hip[0]) - (b_lfoot[0] - base_hip[0]),
-                "dy": (c_lfoot[1] - cur_hip[1]) - (b_lfoot[1] - base_hip[1]),
-                "angle_deg": d_theta_lleg,
-            }
+            parts_kinematics["left_leg"] = _make_part_kinematics(
+                dx=(c_lfoot[0] - cur_hip[0]) - (b_lfoot[0] - base_hip[0]),
+                dy=(c_lfoot[1] - cur_hip[1]) - (b_lfoot[1] - base_hip[1]),
+                angle_deg=d_theta_lleg,
+            )
 
             # Subpartes anatómicas pierna izquierda
             d_theta_l_thigh = _normalize_angle_deg(_calculate_segment_angle_deg(cur_hip, c_lk) - _calculate_segment_angle_deg(base_hip, b_lk))
             d_theta_l_lower = _normalize_angle_deg(_calculate_segment_angle_deg(c_lk, c_la) - _calculate_segment_angle_deg(b_lk, b_la))
             d_theta_l_foot = _normalize_angle_deg(_calculate_segment_angle_deg(c_la, c_lfoot) - _calculate_segment_angle_deg(b_la, b_lfoot))
 
-            parts_kinematics["left_thigh"] = {
-                "dx": (c_lk[0] - cur_hip[0]) - (b_lk[0] - base_hip[0]),
-                "dy": (c_lk[1] - cur_hip[1]) - (b_lk[1] - base_hip[1]),
-                "angle_deg": d_theta_l_thigh,
-            }
-            parts_kinematics["left_lower_leg"] = {
-                "dx": (c_la[0] - c_lk[0]) - (b_la[0] - b_lk[0]),
-                "dy": (c_la[1] - c_lk[1]) - (b_la[1] - b_lk[1]),
-                "angle_deg": d_theta_l_lower,
-            }
-            parts_kinematics["left_foot"] = {
-                "dx": (c_lfoot[0] - c_la[0]) - (b_lfoot[0] - b_la[0]),
-                "dy": (c_lfoot[1] - c_la[1]) - (b_lfoot[1] - b_la[1]),
-                "angle_deg": d_theta_l_foot,
-            }
+            parts_kinematics["left_thigh"] = _make_part_kinematics(
+                dx=(c_lk[0] - cur_hip[0]) - (b_lk[0] - base_hip[0]),
+                dy=(c_lk[1] - cur_hip[1]) - (b_lk[1] - base_hip[1]),
+                angle_deg=d_theta_l_thigh,
+            )
+            parts_kinematics["left_lower_leg"] = _make_part_kinematics(
+                dx=(c_la[0] - c_lk[0]) - (b_la[0] - b_lk[0]),
+                dy=(c_la[1] - c_lk[1]) - (b_la[1] - b_lk[1]),
+                angle_deg=d_theta_l_lower,
+            )
+            parts_kinematics["left_foot"] = _make_part_kinematics(
+                dx=(c_lfoot[0] - c_la[0]) - (b_lfoot[0] - b_la[0]),
+                dy=(c_lfoot[1] - c_la[1]) - (b_lfoot[1] - b_la[1]),
+                angle_deg=d_theta_l_foot,
+            )
 
             # 6. Pierna derecha completa y subcadenas (hip -> knee -> ankle -> foot)
             b_rk = self._get_anchor_pos(base_skel, "right_knee", (40.0, 62.0))
@@ -259,32 +276,32 @@ class TemplateExtractorV2:
             cur_rleg_ang = _calculate_segment_angle_deg(cur_hip, c_rfoot)
             d_theta_rleg = _normalize_angle_deg(cur_rleg_ang - base_rleg_ang)
 
-            parts_kinematics["right_leg"] = {
-                "dx": (c_rfoot[0] - cur_hip[0]) - (b_rfoot[0] - base_hip[0]),
-                "dy": (c_rfoot[1] - cur_hip[1]) - (b_rfoot[1] - base_hip[1]),
-                "angle_deg": d_theta_rleg,
-            }
+            parts_kinematics["right_leg"] = _make_part_kinematics(
+                dx=(c_rfoot[0] - cur_hip[0]) - (b_rfoot[0] - base_hip[0]),
+                dy=(c_rfoot[1] - cur_hip[1]) - (b_rfoot[1] - base_hip[1]),
+                angle_deg=d_theta_rleg,
+            )
 
             # Subpartes anatómicas pierna derecha
             d_theta_r_thigh = _normalize_angle_deg(_calculate_segment_angle_deg(cur_hip, c_rk) - _calculate_segment_angle_deg(base_hip, b_rk))
             d_theta_r_lower = _normalize_angle_deg(_calculate_segment_angle_deg(c_rk, c_ra) - _calculate_segment_angle_deg(b_rk, b_ra))
             d_theta_r_foot = _normalize_angle_deg(_calculate_segment_angle_deg(c_ra, c_rfoot) - _calculate_segment_angle_deg(b_ra, b_rfoot))
 
-            parts_kinematics["right_thigh"] = {
-                "dx": (c_rk[0] - cur_hip[0]) - (b_rk[0] - base_hip[0]),
-                "dy": (c_rk[1] - cur_hip[1]) - (b_rk[1] - base_hip[1]),
-                "angle_deg": d_theta_r_thigh,
-            }
-            parts_kinematics["right_lower_leg"] = {
-                "dx": (c_ra[0] - c_rk[0]) - (b_ra[0] - b_rk[0]),
-                "dy": (c_ra[1] - c_rk[1]) - (b_ra[1] - b_rk[1]),
-                "angle_deg": d_theta_r_lower,
-            }
-            parts_kinematics["right_foot"] = {
-                "dx": (c_rfoot[0] - c_ra[0]) - (b_rfoot[0] - b_ra[0]),
-                "dy": (c_rfoot[1] - c_ra[1]) - (b_rfoot[1] - b_ra[1]),
-                "angle_deg": d_theta_r_foot,
-            }
+            parts_kinematics["right_thigh"] = _make_part_kinematics(
+                dx=(c_rk[0] - cur_hip[0]) - (b_rk[0] - base_hip[0]),
+                dy=(c_rk[1] - cur_hip[1]) - (b_rk[1] - base_hip[1]),
+                angle_deg=d_theta_r_thigh,
+            )
+            parts_kinematics["right_lower_leg"] = _make_part_kinematics(
+                dx=(c_ra[0] - c_rk[0]) - (b_ra[0] - b_rk[0]),
+                dy=(c_ra[1] - c_rk[1]) - (b_ra[1] - b_rk[1]),
+                angle_deg=d_theta_r_lower,
+            )
+            parts_kinematics["right_foot"] = _make_part_kinematics(
+                dx=(c_rfoot[0] - c_ra[0]) - (b_rfoot[0] - b_ra[0]),
+                dy=(c_rfoot[1] - c_ra[1]) - (b_rfoot[1] - b_ra[1]),
+                angle_deg=d_theta_r_foot,
+            )
 
             # Anchors relativos al hip del frame 1
             anchors_rel: Dict[str, Dict[str, float]] = {}
@@ -300,8 +317,11 @@ class TemplateExtractorV2:
                 "frame_index": frame_idx,
                 "root_dx": root_dx,
                 "root_dy": root_dy,
+                "root_dx_ratio": root_dx / char_w,
+                "root_dy_ratio": root_dy / char_h,
                 "parts": parts_kinematics,
                 "anchors_rel": anchors_rel,
+                "confidence": cur_skel.average_confidence,
             })
 
         return sequence_data
@@ -314,55 +334,104 @@ class TemplateExtractorV2:
         """
         Agrega cinemáticamente las secuencias de múltiples personajes para una animación,
         aplicando filtrado de anomalías (MAD) en cada variable articular.
+        Garantiza la preservación de las 18 partes corporales completas y subcadenas anatómicas,
+        así como el filtrado de secuencias con baja confianza (< 0.60 REVIEW_REQUIRED).
         """
         if not character_sequences:
             return ArticulatedMotionTemplate(animation_name=animation_name)
 
         frame_count = max(len(seq) for seq in character_sequences)
         total_outliers = 0
-        samples_used = len(character_sequences)
 
-        # Extraer cinemática de cada personaje
-        extracted_samples = [self.extract_motion_from_sequence(seq) for seq in character_sequences if len(seq) == frame_count]
+        # Filtrado de confianza: secuencias con frames de confianza < 0.60
+        # se marcan REVIEW_REQUIRED y no contaminan la agregación principal
+        clean_sequences = []
+        review_sequences = []
+        for seq in character_sequences:
+            if len(seq) != frame_count:
+                continue
+            min_conf = min((skel.average_confidence for skel in seq), default=1.0)
+            if min_conf < 0.60:
+                logger.warning(
+                    f"TemplateExtractorV2: Secuencia para '{animation_name}' con baja confianza "
+                    f"({min_conf:.2f} < 0.60). Marcada REVIEW_REQUIRED y excluida de agregación primaria."
+                )
+                review_sequences.append(seq)
+            else:
+                if min_conf < 0.75:
+                    logger.info(
+                        f"TemplateExtractorV2: Secuencia para '{animation_name}' utilizada con advertencia "
+                        f"(0.60 <= confianza {min_conf:.2f} < 0.75)."
+                    )
+                clean_sequences.append(seq)
+
+        usable_sequences = clean_sequences if clean_sequences else review_sequences
+        samples_used = len(usable_sequences)
+
+        # Extraer cinemática de cada secuencia utilizable
+        extracted_samples = [self.extract_motion_from_sequence(seq) for seq in usable_sequences]
         if not extracted_samples:
             return ArticulatedMotionTemplate(animation_name=animation_name)
 
         aggregated_frames: List[ArticulatedFrameTemplate] = []
 
-        part_names = ["head", "torso", "left_arm", "right_arm", "left_leg", "right_leg"]
+        # Las 18 partes anatómicas canónicas y subcadenas completas
+        ALL_PART_NAMES = [
+            "head", "torso",
+            "left_arm", "left_upper_arm", "left_forearm", "left_hand",
+            "right_arm", "right_upper_arm", "right_forearm", "right_hand",
+            "left_leg", "left_thigh", "left_lower_leg", "left_foot",
+            "right_leg", "right_thigh", "right_lower_leg", "right_foot",
+        ]
 
         for f_idx in range(frame_count):
             frame_num = f_idx + 1
 
-            # Recolectar root_dx y root_dy de todas las muestras
+            # Recolectar root_dx y root_dy absolutos y relativos de todas las muestras
             root_dx_vals = [sample[f_idx]["root_dx"] for sample in extracted_samples]
             root_dy_vals = [sample[f_idx]["root_dy"] for sample in extracted_samples]
+            root_dxr_vals = [sample[f_idx]["root_dx_ratio"] for sample in extracted_samples]
+            root_dyr_vals = [sample[f_idx]["root_dy_ratio"] for sample in extracted_samples]
 
             clean_rdx, o1 = _filter_outliers_mad(root_dx_vals)
             clean_rdy, o2 = _filter_outliers_mad(root_dy_vals)
+            clean_rdxr, _ = _filter_outliers_mad(root_dxr_vals)
+            clean_rdyr, _ = _filter_outliers_mad(root_dyr_vals)
             total_outliers += (o1 + o2)
 
             agg_root_dx = float(np.median(clean_rdx))
             agg_root_dy = float(np.median(clean_rdy))
+            agg_root_dx_ratio = float(np.median(clean_rdxr))
+            agg_root_dy_ratio = float(np.median(clean_rdyr))
 
-            # Recolectar datos por cada parte corporal
+            # Recolectar datos por cada una de las 18 partes corporales
             agg_parts: Dict[str, PartMotion] = {}
-            for pname in part_names:
+            for pname in ALL_PART_NAMES:
                 dx_vals = [sample[f_idx]["parts"][pname]["dx"] for sample in extracted_samples]
                 dy_vals = [sample[f_idx]["parts"][pname]["dy"] for sample in extracted_samples]
+                dxr_vals = [sample[f_idx]["parts"][pname]["dx_ratio"] for sample in extracted_samples]
+                dyr_vals = [sample[f_idx]["parts"][pname]["dy_ratio"] for sample in extracted_samples]
                 ang_vals = [sample[f_idx]["parts"][pname]["angle_deg"] for sample in extracted_samples]
 
                 c_dx, o_dx = _filter_outliers_mad(dx_vals)
                 c_dy, o_dy = _filter_outliers_mad(dy_vals)
+                c_dxr, _ = _filter_outliers_mad(dxr_vals)
+                c_dyr, _ = _filter_outliers_mad(dyr_vals)
                 c_ang, o_ang = _filter_outliers_mad(ang_vals)
                 total_outliers += (o_dx + o_dy + o_ang)
+
+                # Confianza promedio de frame para esta parte
+                frame_confs = [sample[f_idx].get("confidence", 1.0) for sample in extracted_samples]
+                avg_part_conf = float(np.mean(frame_confs)) if frame_confs else 1.0
 
                 agg_parts[pname] = PartMotion(
                     dx=float(np.median(c_dx)),
                     dy=float(np.median(c_dy)),
+                    dx_ratio=float(np.median(c_dxr)),
+                    dy_ratio=float(np.median(c_dyr)),
                     angle_deg=float(np.median(c_ang)),
                     scale=1.0,
-                    confidence=1.0
+                    confidence=round(avg_part_conf, 3),
                 )
 
             # Anchors relativos agregados
@@ -384,6 +453,8 @@ class TemplateExtractorV2:
                 frame_index=frame_num,
                 root_dx=agg_root_dx,
                 root_dy=agg_root_dy,
+                root_dx_ratio=agg_root_dx_ratio,
+                root_dy_ratio=agg_root_dy_ratio,
                 parts=agg_parts,
                 anchors_rel=agg_anchors,
             )

@@ -6,11 +6,13 @@ from core.layer_resolver import LayerResolver
 @dataclass
 class PartMotion:
     """
-    Representa la cinemática articular (traslación, rotación y escala)
+    Representa la cinemática articular (traslación en px, traslación relativa a tamaño, rotación y escala)
     de una parte corporal en un frame específico de la animación.
     """
     dx: float = 0.0
     dy: float = 0.0
+    dx_ratio: float = 0.0
+    dy_ratio: float = 0.0
     angle_deg: float = 0.0
     scale: float = 1.0
     confidence: float = 1.0
@@ -19,6 +21,8 @@ class PartMotion:
         return {
             "dx": round(float(self.dx), 2),
             "dy": round(float(self.dy), 2),
+            "dx_ratio": round(float(self.dx_ratio), 4),
+            "dy_ratio": round(float(self.dy_ratio), 4),
             "angle_deg": round(float(self.angle_deg), 2),
             "scale": round(float(self.scale), 3),
             "confidence": round(float(self.confidence), 3),
@@ -29,6 +33,8 @@ class PartMotion:
         return cls(
             dx=float(data.get("dx", 0.0)),
             dy=float(data.get("dy", 0.0)),
+            dx_ratio=float(data.get("dx_ratio", 0.0)),
+            dy_ratio=float(data.get("dy_ratio", 0.0)),
             angle_deg=float(data.get("angle_deg", 0.0)),
             scale=float(data.get("scale", 1.0)),
             confidence=float(data.get("confidence", 1.0)),
@@ -43,6 +49,8 @@ class ArticulatedFrameTemplate:
     frame_index: int
     root_dx: float = 0.0
     root_dy: float = 0.0
+    root_dx_ratio: float = 0.0
+    root_dy_ratio: float = 0.0
     parts: Dict[str, PartMotion] = field(default_factory=dict)
     anchors_rel: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
@@ -51,6 +59,8 @@ class ArticulatedFrameTemplate:
             "frame_index": self.frame_index,
             "root_dx": round(float(self.root_dx), 2),
             "root_dy": round(float(self.root_dy), 2),
+            "root_dx_ratio": round(float(self.root_dx_ratio), 4),
+            "root_dy_ratio": round(float(self.root_dy_ratio), 4),
             "parts": {name: pm.to_dict() for name, pm in self.parts.items()},
             "anchors_rel": self.anchors_rel,
         }
@@ -62,6 +72,8 @@ class ArticulatedFrameTemplate:
             frame_index=int(data["frame_index"]),
             root_dx=float(data.get("root_dx", 0.0)),
             root_dy=float(data.get("root_dy", 0.0)),
+            root_dx_ratio=float(data.get("root_dx_ratio", 0.0)),
+            root_dy_ratio=float(data.get("root_dy_ratio", 0.0)),
             parts=parts,
             anchors_rel=data.get("anchors_rel", {}),
         )
