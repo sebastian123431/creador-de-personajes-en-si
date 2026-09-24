@@ -101,7 +101,7 @@ class FrameExtractor:
                     frame_path = anim_dir / frame_filename
 
                     # Recortar celda pixel-perfect
-                    box = (cell.x, cell.y, cell.x + cell.w, cell.y + cell.h)
+                    box = cell.box if hasattr(cell, "box") else (cell.x, cell.y, cell.x + cell.w, cell.y + cell.h)
                     frame_crop = full_img.crop(box)
                     frame_crop.save(frame_path, "PNG")
 

@@ -43,10 +43,16 @@ class AnchorTracker:
         manual_dict = manual_annotations_by_frame or {}
 
         # 1. Analizar Frame 1 como ancla temporal base
-        f0_path = frames[0].image_path if isinstance(frames[0], Frame) else Path(frames[0])
+        if isinstance(frames[0], Frame):
+            f0_input = frames[0].image_path
+        elif isinstance(frames[0], Image.Image):
+            f0_input = frames[0]
+        else:
+            f0_input = Path(frames[0])
+
         f0_manual = manual_dict.get(1)
         base_skeleton = self.pose_analyzer.analyze_pose(
-            f0_path,
+            f0_input,
             orientation=orientation,
             manual_annotations=f0_manual
         )
@@ -55,14 +61,20 @@ class AnchorTracker:
         # 2. Rastreo progresivo para Frames 2, 3, 4 guiado por el frame precedente
         for idx in range(1, len(frames)):
             frame_num = idx + 1
-            f_path = frames[idx].image_path if isinstance(frames[idx], Frame) else Path(frames[idx])
+            if isinstance(frames[idx], Frame):
+                f_input = frames[idx].image_path
+            elif isinstance(frames[idx], Image.Image):
+                f_input = frames[idx]
+            else:
+                f_input = Path(frames[idx])
+
             cur_manual = manual_dict.get(frame_num)
 
             prev_skel = skeletons[idx - 1]
 
             # Detección V2 asistida por el esqueleto previo
             raw_skel = self.pose_analyzer.analyze_pose(
-                f_path,
+                f_input,
                 orientation=orientation,
                 manual_annotations=cur_manual,
                 prev_skeleton=prev_skel
