@@ -1,0 +1,388 @@
+import logging
+from pathlib import Path
+from typing import Dict, Optional
+from PySide6.QtCore import Qt, QThread
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QSplitter, QStatusBar, QMessageBox, QPushButton,
+    QLabel, QFrame, QProgressDialog, QFileDialog
+)
+
+from core.frame_extractor import OFFICIAL_ANIMATION_ROWS
+from core.similarity import FrameComparator
+from models.animation import Animation
+from models.character import Character
+from services.animation_service import AnimationService
+from services.dataset_service import DatasetService
+from services.export_service import ExportService
+from services.training_service import TrainingService, TrainingWorker, TrainingReport
+from ui.character_panel import CharacterPanel
+from ui.comparison_panel import ComparisonDialog
+from ui.dataset_panel import DatasetPanel
+from ui.preview_panel import PreviewPanel
+from ui.timeline_panel import TimelinePanel
+from ui.theme import DARK_THEME_QSS
+
+logger = logging.getLogger("SpriteStudio.MainWindow")
+
+
+class MainWindow(QMainWindow):
+    """
+    Ventana principal de Villa del Chef - Sprite Studio.
+    Integra Dataset, Visor Pixel-Perfect, Inspector de Personajes,
+    Línea de Tiempo con Onion Skinning, Entrenamiento Cinemático,
+    Transferencia de Movimiento y Exportación para Unity.
+    """
+    def __init__(
+        self,
+        dataset_service: Optional[DatasetService] = None,
+        animation_service: Optional[AnimationService] = None,
+        export_service: Optional[ExportService] = None,
+        training_service: Optional[TrainingService] = None,
+    ):
+        super().__init__()
+        self.setWindowTitle("Villa del Chef - Sprite Studio")
+        self.resize(1420, 860)
+        self.setMinimumSize(1080, 720)
+
+        # Servicios
+        self.dataset_service = dataset_service or DatasetService()
+        self.animation_service = animation_service or AnimationService()
+        self.export_service = export_service or ExportService()
+        self.training_service = training_service or TrainingService(self.dataset_service)
+
+        # Estado activo
+        self.current_character: Optional[Character] = None
+        self.current_variant_name: str = "rnormal"
+        self.current_animations: Dict[str, Animation] = {}
+        self.training_thread: Optional[QThread] = None
+        self.training_worker: Optional[TrainingWorker] = None
+
+        self._setup_ui()
+        self._setup_menu()
+        self._setup_statusbar()
+        self._connect_signals()
+
+        # Cargar dataset inicial
+        self.dataset_panel.reload_dataset()
+
+    def _setup_ui(self):
+        self.setStyleSheet(DARK_THEME_QSS)
+
+        central_widget = QWidget()
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(6)
+
+        # Splitter de tres columnas principales (Dataset | Preview | Character)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        self.dataset_panel = DatasetPanel(self.dataset_service)
+        self.preview_panel = PreviewPanel()
+        self.character_panel = CharacterPanel()
+
+        splitter.addWidget(self.dataset_panel)
+        splitter.addWidget(self.preview_panel)
+        splitter.addWidget(self.character_panel)
+
+        splitter.setStretchFactor(0, 2)  # Dataset
+        splitter.setStretchFactor(1, 5)  # Preview
+        splitter.setStretchFactor(2, 3)  # Character
+
+        main_layout.addWidget(splitter, 1)
+
+        # Barra inferior interactiva: Timeline y Acciones de Pipeline
+        bottom_box = QFrame()
+        bottom_box.setStyleSheet("background: #181b22; border: 1px solid #28303e; border-radius: 6px; padding: 6px;")
+        bottom_layout = QVBoxLayout(bottom_box)
+        bottom_layout.setSpacing(8)
+
+        # Timeline Panel
+        self.timeline_panel = TimelinePanel()
+        bottom_layout.addWidget(self.timeline_panel)
+
+        # Fila de Acciones de Pipeline
+        pipeline_bar = QHBoxLayout()
+
+        self.train_btn = QPushButton("⚡ TRAIN DATASET")
+        self.train_btn.setObjectName("primaryButton")
+        self.train_btn.setToolTip("Aprender templates de movimiento (medianas) a partir del dataset Approved")
+        self.train_btn.clicked.connect(self._on_train_clicked)
+
+        self.gen_btn = QPushButton("✨ GENERATE MOVEMENT")
+        self.gen_btn.setToolTip("Transferir movimiento aprendido preservando identidad visual del personaje")
+        self.gen_btn.clicked.connect(self._on_generate_movement_clicked)
+
+        self.export_btn = QPushButton("📦 EXPORT SPRITESHEET (4x16)")
+        self.export_btn.setToolTip("Exportar spritesheet 4x16 (64 frames), frames individuales y metadata Unity")
+        self.export_btn.clicked.connect(self._on_export_clicked)
+
+        self.diff_btn = QPushButton("🔍 COMPARAR FRAMES (DIFF)")
+        self.diff_btn.clicked.connect(self._on_compare_frames_clicked)
+
+        pipeline_bar.addWidget(self.train_btn)
+        pipeline_bar.addWidget(self.gen_btn)
+        pipeline_bar.addWidget(self.export_btn)
+        pipeline_bar.addWidget(self.diff_btn)
+
+        bottom_layout.addLayout(pipeline_bar)
+        main_layout.addWidget(bottom_box)
+
+        self.setCentralWidget(central_widget)
+
+    def _setup_menu(self):
+        menubar = self.menuBar()
+
+        # Menú Dataset
+        dataset_menu = menubar.addMenu("Dataset")
+
+        import_act = dataset_menu.addAction("Importar personajes terminados...")
+        import_act.triggered.connect(self.dataset_panel._on_import_clicked)
+
+        rescan_act = dataset_menu.addAction("Re-escanear Dataset")
+        rescan_act.triggered.connect(self.dataset_panel.reload_dataset)
+
+        rebuild_act = dataset_menu.addAction("Reconstruir dataset_index.json")
+        rebuild_act.triggered.connect(self.dataset_panel._on_rebuild_index)
+
+        validate_act = dataset_menu.addAction("Validar Integridad del Dataset")
+        validate_act.triggered.connect(self._on_validate_dataset)
+
+        dataset_menu.addSeparator()
+        exit_act = dataset_menu.addAction("Salir")
+        exit_act.triggered.connect(self.close)
+
+        # Menú Herramientas
+        tools_menu = menubar.addMenu("Herramientas")
+        train_act = tools_menu.addAction("Entrenar Plantillas de Movimiento")
+        train_act.triggered.connect(self._on_train_clicked)
+
+        diff_act = tools_menu.addAction("Comparar Dos Frames con cv2.absdiff")
+        diff_act.triggered.connect(self._on_compare_frames_clicked)
+
+        # Menú Ayuda
+        help_menu = menubar.addMenu("Ayuda")
+        about_act = help_menu.addAction("Acerca de Sprite Studio")
+        about_act.triggered.connect(self._on_about)
+
+    def _setup_statusbar(self):
+        self.statusbar = QStatusBar()
+        self.setStatusBar(self.statusbar)
+        self.status_label = QLabel("Listo.")
+        self.statusbar.addWidget(self.status_label)
+
+    def _connect_signals(self):
+        self.dataset_panel.character_selected.connect(self._on_character_selected)
+        self.character_panel.variant_changed.connect(self._on_variant_changed)
+        self.dataset_panel.dataset_modified.connect(self._update_status_stats)
+
+        # Timeline signals
+        self.timeline_panel.frame_changed.connect(self._on_timeline_frame_changed)
+        self.timeline_panel.onion_skin_toggled.connect(self._on_onion_skin_toggled)
+
+    def _on_character_selected(self, character: Optional[Character]):
+        self.current_character = character
+        self.character_panel.set_character(character)
+
+    def _on_variant_changed(self, variant_name: str, ref_path: Optional[Path], sheet_path: Optional[Path]):
+        self.current_variant_name = variant_name
+        self.preview_panel.load_variant_assets(ref_path, sheet_path)
+
+        # Cargar animaciones si existen
+        if self.current_character:
+            anims = self.animation_service.get_or_extract_animations(self.current_character, variant_name)
+            self.current_animations = anims
+            self.timeline_panel.set_animations(anims)
+        else:
+            self.current_animations = {}
+            self.timeline_panel.set_animations({})
+
+    def _on_timeline_frame_changed(self, frame_obj, frame_idx: int):
+        if frame_obj and frame_obj.image_path.exists():
+            # Si el usuario activa Onion Skin, renderizarlo
+            if self.timeline_panel.onion_check.isChecked():
+                prev_f = self.timeline_panel.get_frame_at((frame_idx - 1) % 4)
+                next_f = self.timeline_panel.get_frame_at((frame_idx + 1) % 4)
+                onion_img = FrameComparator.create_onion_skin_frame(
+                    frame_obj.image_path,
+                    prev_f.image_path if prev_f else None,
+                    next_f.image_path if next_f else None
+                )
+                if onion_img:
+                    # Guardar temporal para visualización
+                    temp_onion_path = Path(".cache") / "temp_onion.png"
+                    temp_onion_path.parent.mkdir(parents=True, exist_ok=True)
+                    onion_img.save(temp_onion_path, "PNG")
+                    self.preview_panel.canvas.set_image(temp_onion_path)
+                    return
+
+            self.preview_panel.canvas.set_image(frame_obj.image_path)
+
+    def _on_onion_skin_toggled(self, checked: bool):
+        cur_frame = self.timeline_panel.get_current_frame()
+        if cur_frame:
+            self._on_timeline_frame_changed(cur_frame, self.timeline_panel.current_frame_idx)
+
+    def _update_status_stats(self):
+        appr_count = len(self.dataset_service.approved_characters)
+        inc_count = len(self.dataset_service.incoming_characters)
+        rej_count = len(self.dataset_service.rejected_characters)
+
+        total_variants = sum(c.variant_count for c in self.dataset_service.approved_characters.values())
+        total_sheets = sum(c.spritesheet_count for c in self.dataset_service.approved_characters.values())
+        total_refs = sum(c.reference_count for c in self.dataset_service.approved_characters.values())
+
+        msg = (
+            f"Approved: {appr_count} personajes | "
+            f"Variantes: {total_variants} ({total_refs} refs, {total_sheets} sheets) | "
+            f"Incoming: {inc_count} | Rejected: {rej_count}"
+        )
+        self.status_label.setText(msg)
+
+    def _on_validate_dataset(self):
+        report = self.dataset_service.validate_all_approved()
+        if report.is_valid:
+            QMessageBox.information(
+                self,
+                "Validación de Dataset",
+                f"Validación exitosa:\n"
+                f"- Personajes verificados: {report.total_characters}\n"
+                f"- Válidos sin errores: {report.valid_characters}\n"
+                f"- Errores: {report.error_count}\n"
+                f"- Advertencias: {report.warning_count}"
+            )
+        else:
+            first_errs = "\n".join(f"[{i.severity}] {i.character_id} ({i.variant}): {i.message}" for i in report.issues[:10])
+            QMessageBox.warning(
+                self,
+                "Validación con Observaciones",
+                f"Se detectaron {report.error_count} errores y {report.warning_count} advertencias:\n\n"
+                f"{first_errs}\n..."
+            )
+
+    def _on_train_clicked(self):
+        """Ejecuta el entrenamiento cinemático en QThread sin bloquear la GUI."""
+        if len(self.dataset_service.approved_characters) == 0:
+            QMessageBox.warning(self, "Dataset Vacío", "No hay personajes en 'approved' para aprender movimiento.")
+            return
+
+        progress_dlg = QProgressDialog("Iniciando entrenamiento...", "Cancelar", 0, 10, self)
+        progress_dlg.setWindowTitle("Entrenando Plantillas de Movimiento")
+        progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dlg.setMinimumDuration(0)
+        progress_dlg.setValue(0)
+
+        self.training_thread = QThread()
+        self.training_worker = self.training_service.create_worker()
+        self.training_worker.moveToThread(self.training_thread)
+
+        self.training_thread.started.connect(self.training_worker.run_training)
+
+        def on_progress(msg, step, total):
+            progress_dlg.setLabelText(msg)
+            progress_dlg.setValue(step)
+
+        def on_finished(report: TrainingReport):
+            progress_dlg.close()
+            self.training_thread.quit()
+            self.training_thread.wait()
+
+            QMessageBox.information(
+                self,
+                "Entrenamiento Completado",
+                report.summary_text()
+            )
+            self._update_status_stats()
+
+        def on_error(err_msg: str):
+            progress_dlg.close()
+            self.training_thread.quit()
+            self.training_thread.wait()
+            QMessageBox.critical(self, "Error de Entrenamiento", f"Ocurrió un error:\n{err_msg}")
+
+        self.training_worker.progress.connect(on_progress)
+        self.training_worker.finished.connect(on_finished)
+        self.training_worker.error.connect(on_error)
+
+        self.training_thread.start()
+
+    def _on_generate_movement_clicked(self):
+        """Aplica la transferencia de movimiento aprendida a un personaje nuevo."""
+        if not self.current_character:
+            QMessageBox.warning(self, "Selección requerida", "Seleccione un personaje para generar movimiento.")
+            return
+
+        variant = self.current_character.variants.get(self.current_variant_name)
+        if not variant or not variant.reference_image or not variant.reference_image.exists():
+            QMessageBox.warning(self, "Falta Referencia", f"La variante '{self.current_variant_name}' no posee imagen de referencia.")
+            return
+
+        try:
+            anims = self.animation_service.generate_animations_for_new_character(
+                variant.reference_image,
+                self.current_character.character_id,
+                self.current_variant_name
+            )
+            self.current_animations = anims
+            self.timeline_panel.set_animations(anims)
+            QMessageBox.information(
+                self,
+                "Movimiento Generado",
+                f"Se generaron los 64 frames (16 animaciones x 4 frames) exitosamente para "
+                f"'{self.current_character.display_name}' ({self.current_variant_name}) respetando al 100% su identidad visual."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error de Generación", f"Error al generar movimiento: {e}")
+
+    def _on_export_clicked(self):
+        """Exporta spritesheet 4x16 y metadata Unity."""
+        if not self.current_character or not self.current_animations:
+            QMessageBox.warning(self, "Sin Animaciones", "Seleccione un personaje con animaciones extraídas o generadas para exportar.")
+            return
+
+        try:
+            sheet_p, meta_p, metrics = self.export_service.export_character_variant(
+                self.current_character.character_id,
+                self.current_variant_name,
+                self.current_animations
+            )
+            QMessageBox.information(
+                self,
+                "Exportación Exitosa para Unity",
+                f"Spritesheet maestro exportado exitosamente:\n\n"
+                f"• Spritesheet: {sheet_p.name}\n"
+                f"• Metadata Unity: {meta_p.name}\n"
+                f"• Carpeta de frames individuales: {sheet_p.parent / 'frames'}\n\n"
+                f"Consistency Score: {metrics.overall_score}%\n"
+                f"  - Baseline stability: {metrics.baseline_stability}%\n"
+                f"  - BBox consistency: {metrics.bbox_consistency}%\n"
+                f"  - Alpha area stability: {metrics.alpha_area_stability}%"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error de Exportación", f"Ocurrió un error al exportar: {e}")
+
+    def _on_compare_frames_clicked(self):
+        """Abre diálogo para comparar dos frames usando cv2.absdiff."""
+        file_a, _ = QFileDialog.getOpenFileName(self, "Seleccionar Frame A", filter="Imágenes (*.png)")
+        if not file_a:
+            return
+        file_b, _ = QFileDialog.getOpenFileName(self, "Seleccionar Frame B", filter="Imágenes (*.png)")
+        if not file_b:
+            return
+
+        dlg = ComparisonDialog(Path(file_a), Path(file_b), self)
+        dlg.exec()
+
+    def _on_about(self):
+        QMessageBox.about(
+            self,
+            "Villa del Chef - Sprite Studio",
+            "<b>Villa del Chef - Sprite Studio v1.0.0</b><br><br>"
+            "Herramienta integral de cinemática y generación de animaciones pixel art 2D.<br>"
+            "• Extracción de 64 frames (4 columnas x 16 filas)<br>"
+            "• Normalización pixel-perfect con baseline común<br>"
+            "• Aprendizaje de movimiento geométrico (medianas sin promediar caras)<br>"
+            "• Transferencia cinemática preservando identidad visual<br>"
+            "• Exportación de Spritesheet y metadatos para Unity<br><br>"
+            "Desarrollado para el videojuego <i>Villa del Chef</i>."
+        )

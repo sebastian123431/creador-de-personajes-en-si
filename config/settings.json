@@ -1,0 +1,50 @@
+{
+  "app_name": "Villa del Chef - Sprite Studio",
+  "version": "1.0.0",
+  "dataset_version": "1.0.0",
+  "paths": {
+    "dataset_root": "dataset",
+    "approved_characters": "dataset/finished_characters/approved",
+    "rejected_characters": "dataset/finished_characters/rejected",
+    "incoming_characters": "dataset/finished_characters/incoming",
+    "dataset_index": "dataset/dataset_index.json",
+    "indexed": "dataset/indexed",
+    "normalized": "dataset/normalized",
+    "extracted_frames": "dataset/extracted_frames",
+    "training": "dataset/training",
+    "learned_animations": "animations/learned",
+    "templates": "animations/templates",
+    "cache": ".cache"
+  },
+  "spritesheet": {
+    "expected_columns": 4,
+    "expected_rows": 16,
+    "total_frames": 64,
+    "standard_canvas_width": 256,
+    "standard_canvas_height": 192
+  },
+  "official_variants": ["rnormal", "rbchef", "rnchef"],
+  "variant_labels": {
+    "rnormal": "Ropa Normal",
+    "rbchef": "Ropa Blanca Chef",
+    "rnchef": "Ropa Negra Chef"
+  },
+  "animation_rows": [
+    "idle_down",
+    "walk_down",
+    "idle_up",
+    "walk_up",
+    "idle_left",
+    "walk_left",
+    "idle_right",
+    "walk_right",
+    "cook_down",
+    "cook_up",
+    "cook_left",
+    "cook_right",
+    "think",
+    "pickup",
+    "serve",
+    "celebrate"
+  ]
+}
