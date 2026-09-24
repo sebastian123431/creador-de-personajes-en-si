@@ -24,7 +24,10 @@ dataset/transferred_v2/
 dataset/templates_v2/
 dataset/body_parts/
 dataset/annotations/
+dataset/training_v2/
 
+logs/
+audit_samples/
 exports/
 output/
 build/

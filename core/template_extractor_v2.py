@@ -469,13 +469,19 @@ class TemplateExtractorV2:
         )
         return template
 
-    def save_template(self, template: ArticulatedMotionTemplate) -> Path:
+    def save_template(
+        self,
+        template: ArticulatedMotionTemplate,
+        version_tag: Optional[str] = None,
+    ) -> Path:
         """
-        Persiste la plantilla en: dataset/templates_v2/<animation_name>.json
+        Persiste la plantilla en:
+        1. dataset/templates_v2/<animation_name>.json (base)
+        2. dataset/templates_v2/current/<animation_name>.json (referencia activa)
+        3. dataset/templates_v2/versions/<version_tag>/<animation_name>.json (versión inmutable si version_tag se provee)
         Garantiza que la escritura sea totalmente externa al dataset de origen mediante SourceDatasetGuard.
         """
-        target_path = self.base_dir / f"{template.animation_name}.json"
-        target_path = target_path.resolve()
+        target_path = (self.base_dir / f"{template.animation_name}.json").resolve()
 
         if self.guard:
             self.guard.assert_can_write(target_path, operation_desc="guardado de plantilla de movimiento articulado")
@@ -486,12 +492,34 @@ class TemplateExtractorV2:
         with open(target_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=4, ensure_ascii=False)
 
+        # Copiar / guardar en current/
+        current_dir = self.base_dir / "current"
+        if self.guard:
+            self.guard.assert_can_write(current_dir, operation_desc="guardado en templates_v2/current")
+        current_dir.mkdir(parents=True, exist_ok=True)
+        current_path = current_dir / f"{template.animation_name}.json"
+        with open(current_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=4, ensure_ascii=False)
+
+        # Guardar en versión inmutable si corresponde
+        if version_tag:
+            version_dir = self.base_dir / "versions" / version_tag
+            if self.guard:
+                self.guard.assert_can_write(version_dir, operation_desc="guardado en templates_v2/versions")
+            version_dir.mkdir(parents=True, exist_ok=True)
+            version_path = version_dir / f"{template.animation_name}.json"
+            with open(version_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=4, ensure_ascii=False)
+
         logger.info(f"Plantilla de movimiento articulado guardada en: {target_path}")
         return target_path
 
     def load_template(self, animation_name: str) -> Optional[ArticulatedMotionTemplate]:
-        """Carga una plantilla existente desde disco."""
-        target_path = self.base_dir / f"{animation_name}.json"
+        """Carga una plantilla existente desde disco (buscando primero en current/ y luego en base)."""
+        current_path = self.base_dir / "current" / f"{animation_name}.json"
+        base_path = self.base_dir / f"{animation_name}.json"
+
+        target_path = current_path if current_path.exists() else base_path
         if not target_path.exists():
             return None
 

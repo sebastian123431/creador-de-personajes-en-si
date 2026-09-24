@@ -162,15 +162,28 @@ class ArticulatedTrainingReport:
     variants_count: int = 0
     templates_v2_generated: int = 0
     outliers_detected: int = 0
+    frames_processed: int = 0
+    frames_cached: int = 0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    session_id: str = ""
+    status: str = "completed"
     warnings: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
 
     def summary_text(self) -> str:
         return (
             f"=== REPORTE ENTRENAMIENTO ARTICULADO V2 ===\n"
+            f"Estado:                        {self.status}\n"
+            f"Sesión ID:                     {self.session_id}\n"
             f"Personajes maestros analizados: {self.characters_count}\n"
             f"Variantes procesadas:          {self.variants_count}\n"
-            f"Plantillas V2 generadas:       {self.templates_v2_generated} / 16\n"
-            f"Outliers filtrados con MAD:    {self.outliers_detected}\n"
+            f"Plantillas V2 generadas:       {self.templates_v2_generated}\n"
+            f"Frames procesados:             {self.frames_processed}\n"
+            f"Frames desde caché:            {self.frames_cached}\n"
+            f"Aciertos de caché (Hits):      {self.cache_hits}\n"
+            f"Fallos de caché (Misses):      {self.cache_misses}\n"
+            f"Errores:                       {len(self.errors)}\n"
             f"Advertencias:                  {len(self.warnings)}\n"
             f"============================================"
         )
@@ -178,86 +191,74 @@ class ArticulatedTrainingReport:
 
 class ArticulatedTrainingWorker(QObject):
     """
-    Worker para entrenar las 16 plantillas cinemáticas V2 con filtrado MAD
-    a partir del dataset aprobado en segundo plano.
+    Worker para entrenar las plantillas cinemáticas V2 con motor incremental,
+    filtrado MAD, caché SHA256 y soporte de cancelación limpia en segundo plano.
     """
     progress = Signal(str, int, int)
     finished = Signal(object)  # ArticulatedTrainingReport
     error = Signal(str)
 
-    def __init__(self, dataset_service: DatasetService, base_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        dataset_service: DatasetService,
+        base_dir: Optional[Path] = None,
+        is_smoke: bool = False,
+        force_rebuild: bool = False,
+    ):
         super().__init__()
         self.dataset_service = dataset_service
         self.base_dir = Path(base_dir or Path.cwd()).resolve()
+        self.is_smoke = is_smoke
+        self.force_rebuild = force_rebuild
 
-        from core.anchor_tracker import AnchorTracker
-        from core.pose_analyzer_v2 import PoseAnalyzerV2
-        from core.template_extractor_v2 import TemplateExtractorV2
-        from core.sheet_detector_v2 import SheetDetectorV2
+        from core.incremental_training_engine import IncrementalTrainingEngineV2
 
-        self.anchor_tracker = AnchorTracker()
-        self.pose_analyzer = PoseAnalyzerV2()
-        self.template_extractor_v2 = TemplateExtractorV2(
-            base_templates_dir=self.base_dir / "dataset" / "templates_v2",
-            guard=self.dataset_service.guard
+        def on_engine_progress(msg: str, cur: int, tot: int, details: dict):
+            self.progress.emit(msg, cur, tot)
+
+        self.engine = IncrementalTrainingEngineV2(
+            base_dir=self.base_dir,
+            dataset_service=self.dataset_service,
+            guard=self.dataset_service.guard,
+            progress_callback=on_engine_progress,
         )
-        self.sheet_detector = SheetDetectorV2(guard=self.dataset_service.guard)
-        self.frame_extractor = FrameExtractor(
-            output_base_dir=self.base_dir / "dataset" / "extracted_frames",
-            sheet_detector=self.sheet_detector,
-            guard=self.dataset_service.guard
-        )
+
+        # Exponer submódulos para compatibilidad directa con tests e inspección
+        self.sheet_detector = self.engine.sheet_detector
+        self.frame_extractor = self.engine.frame_extractor
+        self.pose_analyzer = self.engine.pose_analyzer
+        self.anchor_tracker = self.engine.anchor_tracker
+        self.template_extractor_v2 = self.engine.template_extractor
+
+    def cancel(self):
+        """Solicita la cancelación limpia del entrenamiento."""
+        self.engine.request_cancel()
 
     def run_training(self):
-        report = ArticulatedTrainingReport()
         try:
-            self.progress.emit("Escaneando dataset aprobado para entrenamiento V2...", 1, 6)
-            chars = self.dataset_service.scan_approved()
-            report.characters_count = len(chars)
+            session = self.engine.run_training(
+                is_smoke=self.is_smoke,
+                force_rebuild=self.force_rebuild,
+            )
 
-            if report.characters_count == 0:
-                report.warnings.append("No hay personajes en el dataset aprobado.")
+            report = ArticulatedTrainingReport(
+                characters_count=session.characters_processed,
+                variants_count=session.variants_processed,
+                templates_v2_generated=session.templates_generated,
+                frames_processed=session.frames_processed,
+                frames_cached=session.frames_cached,
+                cache_hits=session.cache_hits,
+                cache_misses=session.cache_misses,
+                session_id=session.session_id,
+                status=session.status,
+                warnings=session.warnings,
+                errors=session.errors,
+            )
+
+            if session.status == "failed":
+                self.error.emit("; ".join(session.errors) if session.errors else "Error desconocido")
+            else:
                 self.finished.emit(report)
-                return
-
-            self.dataset_service.update_index()
-
-            # Recolectar secuencias de frames por animación
-            self.progress.emit("Extrayendo frames y analizando cinemática de los personajes...", 2, 6)
-            anim_sequences: Dict[str, List[List[Any]]] = {a: [] for a in OFFICIAL_ANIMATION_ROWS}
-
-            for char_id, char in chars.items():
-                for v_name, v_obj in char.variants.items():
-                    if not v_obj.has_spritesheet or not v_obj.spritesheet:
-                        continue
-                    report.variants_count += 1
-                    # Extraer frames si no están extraídos
-                    extracted = self.frame_extractor.extract_from_sheet(v_obj.spritesheet, char_id, v_name)
-                    for anim_name, anim_obj in extracted.items():
-                        if anim_name in anim_sequences and len(anim_obj.frames) >= 4:
-                            # Obtener esqueletos para los 4 frames con AnchorTracker
-                            frame_images = [f.image_path for f in anim_obj.frames[:4]]
-                            skeletons = self.anchor_tracker.track_animation_anchors(
-                                frame_images,
-                                orientation=anim_name
-                            )
-                            if len(skeletons) == 4:
-                                anim_sequences[anim_name].append(skeletons)
-
-            # Construir plantillas cinemáticas V2 con filtrado MAD
-            self.progress.emit("Construyendo plantillas V2 con filtrado de anomalías MAD...", 4, 6)
-            for anim_name in OFFICIAL_ANIMATION_ROWS:
-                seqs = anim_sequences.get(anim_name, [])
-                if seqs:
-                    t_v2 = self.template_extractor_v2.build_articulated_template(anim_name, seqs)
-                    self.template_extractor_v2.save_template(t_v2)
-                    report.templates_v2_generated += 1
-                    report.outliers_detected += t_v2.outliers_detected
-                else:
-                    report.warnings.append(f"No hubo muestras suficientes para la animación: {anim_name}")
-
-            self.progress.emit("Entrenamiento articulado V2 completado.", 6, 6)
-            self.finished.emit(report)
 
         except Exception as e:
             logger.exception("Error durante el entrenamiento articulado V2:")
@@ -277,8 +278,17 @@ class TrainingService:
     def create_worker(self) -> TrainingWorker:
         return TrainingWorker(dataset_service=self.dataset_service, base_dir=self.base_dir)
 
-    def create_articulated_worker(self) -> ArticulatedTrainingWorker:
-        return ArticulatedTrainingWorker(dataset_service=self.dataset_service, base_dir=self.base_dir)
+    def create_articulated_worker(
+        self,
+        is_smoke: bool = False,
+        force_rebuild: bool = False,
+    ) -> ArticulatedTrainingWorker:
+        return ArticulatedTrainingWorker(
+            dataset_service=self.dataset_service,
+            base_dir=self.base_dir,
+            is_smoke=is_smoke,
+            force_rebuild=force_rebuild,
+        )
 
     def run_synchronous_training(self) -> TrainingReport:
         worker = self.create_worker()
@@ -292,8 +302,12 @@ class TrainingService:
         worker.run_training()
         return result_report or TrainingReport()
 
-    def run_synchronous_articulated_training(self) -> ArticulatedTrainingReport:
-        worker = self.create_articulated_worker()
+    def run_synchronous_articulated_training(
+        self,
+        is_smoke: bool = False,
+        force_rebuild: bool = False,
+    ) -> ArticulatedTrainingReport:
+        worker = self.create_articulated_worker(is_smoke=is_smoke, force_rebuild=force_rebuild)
         result_report: Optional[ArticulatedTrainingReport] = None
 
         def on_finished(rep):
@@ -303,5 +317,6 @@ class TrainingService:
         worker.finished.connect(on_finished)
         worker.run_training()
         return result_report or ArticulatedTrainingReport()
+
 
 
