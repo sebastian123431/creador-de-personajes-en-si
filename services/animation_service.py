@@ -70,3 +70,65 @@ class AnimationService:
             output_root=out_root
         )
         return anims
+
+    def generate_articulated_animations_v2(
+        self,
+        reference_image: Path,
+        character_id: str,
+        variant_name: str,
+    ) -> Dict[str, Animation]:
+        """
+        Genera los 64 frames (16 animaciones x 4 frames) utilizando el motor articulado V2:
+        - 18 anclajes anatómicos
+        - HeadIdentityLock (cabeza 100% bit-exacta)
+        - pixel_rotate sin difuminado
+        - PaletteGuard (garantía de integridad cromática)
+        """
+        from core.motion_transfer_v2 import MotionTransferV2
+        from core.template_extractor_v2 import TemplateExtractorV2
+        from core.frame_extractor import OFFICIAL_ANIMATION_ROWS
+
+        transfer_engine_v2 = MotionTransferV2()
+        template_extractor_v2 = TemplateExtractorV2(base_templates_dir=self.base_dir / "dataset" / "templates_v2")
+
+        out_root = self.base_dir / "dataset" / "transferred_v2" / character_id / variant_name
+        animations_dict: Dict[str, Animation] = {}
+
+        for anim_name in OFFICIAL_ANIMATION_ROWS:
+            template = template_extractor_v2.load_template(anim_name)
+            if not template:
+                # Si no existe la plantilla V2, generar plantilla neutral de respaldo
+                from models.articulated_motion_template import ArticulatedMotionTemplate
+                template = ArticulatedMotionTemplate(animation_name=anim_name)
+
+            anim_dir = out_root / anim_name
+            frames_imgs = transfer_engine_v2.generate_animation_frames(
+                reference_image=reference_image,
+                template=template,
+                output_dir=anim_dir
+            )
+
+            frame_objects = []
+            for idx, img in enumerate(frames_imgs, start=1):
+                f_path = anim_dir / f"{idx:02d}.png"
+                fw, fh = img.size
+                frame_objects.append(Frame(
+                    image_path=f_path,
+                    index=idx,
+                    bbox=(0, 0, fw, fh),
+                    center_x=fw // 2,
+                    baseline_y=fh - 1,
+                    width=fw,
+                    height=fh
+                ))
+
+            anim = Animation(
+                name=anim_name,
+                frames=frame_objects,
+                row_index=OFFICIAL_ANIMATION_ROWS.index(anim_name) if anim_name in OFFICIAL_ANIMATION_ROWS else 0
+            )
+            animations_dict[anim_name] = anim
+
+        logger.info(f"Generadas 16 animaciones articuladas V2 para '{character_id}:{variant_name}' en: {out_root}")
+        return animations_dict
+

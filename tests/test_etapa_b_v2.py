@@ -80,7 +80,7 @@ def test_annotation_manager_guard_protection(tmp_path: Path):
     """
     approved_dir = tmp_path / "finished_characters" / "approved" / "personajes al 100"
     approved_dir.mkdir(parents=True)
-    guard = SourceDatasetGuard(approved_dir=approved_dir)
+    guard = SourceDatasetGuard(protected_root=approved_dir)
 
     # Intentar configurar el directorio de anotaciones dentro del área protegida
     illegal_dir = approved_dir / "alex" / "annotations"
@@ -208,6 +208,7 @@ def test_interactive_anchor_canvas_coordinates(qapp, tmp_path: Path):
     event = QMouseEvent(
         QMouseEvent.Type.MouseMove,
         QPointF(106.0, 58.0),
+        QPointF(106.0, 58.0),
         Qt.MouseButton.LeftButton,
         Qt.MouseButton.LeftButton,
         Qt.KeyboardModifier.NoModifier
@@ -226,7 +227,7 @@ def test_interactive_anchor_canvas_coordinates(qapp, tmp_path: Path):
     assert head.y == 14
 
 
-def test_anchor_editor_dialog_init_and_save(qapp, tmp_path: Path):
+def test_anchor_editor_dialog_init_and_save(qapp, tmp_path: Path, monkeypatch):
     """
     Verifica la apertura del diálogo AnchorEditorDialog y el flujo de guardado.
     """
@@ -241,7 +242,7 @@ def test_anchor_editor_dialog_init_and_save(qapp, tmp_path: Path):
 
     dialog = AnchorEditorDialog(
         image_path=img_path,
-        initial_skeleton=skel,
+        skeleton=skel,
         character_id="amaro",
         variant="rbchef",
         animation="walk_up",
@@ -250,8 +251,13 @@ def test_anchor_editor_dialog_init_and_save(qapp, tmp_path: Path):
     )
 
     assert dialog is not None
+
+    # Mockear el popup de información en modo prueba
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+
     # Simular guardado desde el botón de la interfaz
-    dialog._on_save()
+    dialog._on_save_clicked()
 
     # Verificar que se haya persistido en el filesystem
     assert manager.has_annotation("amaro", "rbchef", "walk_up", 1)
@@ -259,3 +265,4 @@ def test_anchor_editor_dialog_init_and_save(qapp, tmp_path: Path):
     assert saved_skel is not None
     assert saved_skel.get_anchor("head") is not None
     dialog.close()
+

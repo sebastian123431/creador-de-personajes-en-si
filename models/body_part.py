@@ -38,3 +38,18 @@ class BodyPart:
             "mask_path": str(self.mask_path).replace("\\", "/") if self.mask_path else None,
             "confidence": round(self.confidence, 3),
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BodyPart":
+        mask = Path(data["mask_path"]) if data.get("mask_path") else None
+        return cls(
+            name=data["name"],
+            bbox=tuple(data["bbox"]),
+            pivot_x=float(data["pivot_x"]),
+            pivot_y=float(data["pivot_y"]),
+            parent=data.get("parent"),
+            z_index=int(data.get("z_index", 0)),
+            mask_path=mask,
+            confidence=float(data.get("confidence", 1.0)),
+        )
+

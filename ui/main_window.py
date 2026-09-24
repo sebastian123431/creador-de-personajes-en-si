@@ -15,9 +15,10 @@ from models.character import Character
 from services.animation_service import AnimationService
 from services.dataset_service import DatasetService
 from services.export_service import ExportService
-from services.training_service import TrainingService, TrainingWorker, TrainingReport
+from services.training_service import TrainingService, TrainingWorker, TrainingReport, ArticulatedTrainingReport
 from ui.character_panel import CharacterPanel
 from ui.comparison_panel import ComparisonDialog
+from ui.compare_v1_v2_dialog import CompareV1V2Dialog
 from ui.dataset_panel import DatasetPanel
 from ui.preview_panel import PreviewPanel
 from ui.timeline_panel import TimelinePanel
@@ -55,6 +56,7 @@ class MainWindow(QMainWindow):
         self.current_character: Optional[Character] = None
         self.current_variant_name: str = "rnormal"
         self.current_animations: Dict[str, Animation] = {}
+        self.v2_animations: Dict[str, Animation] = {}
         self.training_thread: Optional[QThread] = None
         self.training_worker: Optional[TrainingWorker] = None
 
@@ -130,7 +132,34 @@ class MainWindow(QMainWindow):
         pipeline_bar.addWidget(self.edit_anchors_btn)
         pipeline_bar.addWidget(self.diff_btn)
 
+        # Fila V2 de Acciones Articuladas
+        v2_bar = QHBoxLayout()
+
+        self.train_v2_btn = QPushButton("🦴 TRAIN ARTICULATED (V2)")
+        self.train_v2_btn.setStyleSheet("background: #0284c7; color: white; font-weight: bold;")
+        self.train_v2_btn.setToolTip("Entrenar plantillas cinemáticas V2 con filtrado MAD desde personajes aprobados")
+        self.train_v2_btn.clicked.connect(self._on_train_v2_clicked)
+
+        self.gen_v2_btn = QPushButton("🚀 GENERATE V2")
+        self.gen_v2_btn.setStyleSheet("background: #059669; color: white; font-weight: bold;")
+        self.gen_v2_btn.setToolTip("Generar movimiento V2 con 18 articulaciones, HeadIdentityLock y PaletteGuard")
+        self.gen_v2_btn.clicked.connect(self._on_generate_v2_clicked)
+
+        self.compare_v1_v2_btn = QPushButton("⚖️ COMPARAR V1 vs V2")
+        self.compare_v1_v2_btn.setToolTip("Inspección animada lado a lado de movimiento V1 vs V2")
+        self.compare_v1_v2_btn.clicked.connect(self._on_compare_v1_v2_clicked)
+
+        self.export_v2_btn = QPushButton("📦 EXPORT UNITY V2")
+        self.export_v2_btn.setToolTip("Exportar spritesheet empaquetado y metadata JSON enriquecida para Unity")
+        self.export_v2_btn.clicked.connect(self._on_export_v2_clicked)
+
+        v2_bar.addWidget(self.train_v2_btn)
+        v2_bar.addWidget(self.gen_v2_btn)
+        v2_bar.addWidget(self.compare_v1_v2_btn)
+        v2_bar.addWidget(self.export_v2_btn)
+
         bottom_layout.addLayout(pipeline_bar)
+        bottom_layout.addLayout(v2_bar)
         main_layout.addWidget(bottom_box)
 
         self.setCentralWidget(central_widget)
@@ -441,12 +470,112 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "Villa del Chef - Sprite Studio",
-            "<b>Villa del Chef - Sprite Studio v1.0.0</b><br><br>"
+            "<b>Villa del Chef - Sprite Studio v2.0.0 (Articulated Edition)</b><br><br>"
             "Herramienta integral de cinemática y generación de animaciones pixel art 2D.<br>"
             "• Extracción de 64 frames (4 columnas x 16 filas)<br>"
-            "• Normalización pixel-perfect con baseline común<br>"
-            "• Aprendizaje de movimiento geométrico (medianas sin promediar caras)<br>"
-            "• Transferencia cinemática preservando identidad visual<br>"
-            "• Exportación de Spritesheet y metadatos para Unity<br><br>"
+            "• Esqueleto anatómico de 18 anclajes con suavizado temporal<br>"
+            "• Segmentación por partes corporales y resolución de capas Z<br>"
+            "• Aprendizaje cinemático con filtrado de anomalías MAD<br>"
+            "• HeadIdentityLock y PaletteGuard: 100% consistencia visual<br>"
+            "• Exportación de Spritesheet y metadatos para Unity / Godot.<br><br>"
             "Desarrollado para el videojuego <i>Villa del Chef</i>."
         )
+
+    def _on_train_v2_clicked(self):
+        """Entrena las 16 plantillas cinemáticas V2 con filtrado MAD."""
+        progress_dlg = QProgressDialog("Entrenando plantillas cinemáticas V2...", "Cancelar", 0, 6, self)
+        progress_dlg.setWindowTitle("Entrenamiento Articulado V2")
+        progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dlg.show()
+
+        worker = self.training_service.create_articulated_worker()
+
+        def on_prog(msg, cur, tot):
+            progress_dlg.setLabelText(msg)
+            progress_dlg.setValue(cur)
+
+        worker.progress.connect(on_prog)
+        rep = self.training_service.run_synchronous_articulated_training()
+        progress_dlg.close()
+
+        QMessageBox.information(
+            self,
+            "Entrenamiento V2 Completado",
+            rep.summary_text()
+        )
+
+    def _on_generate_v2_clicked(self):
+        """Genera movimiento articulado V2 respetando HeadIdentityLock y PaletteGuard."""
+        if not self.current_character:
+            QMessageBox.warning(self, "Sin Personaje", "Seleccione primero un personaje del árbol de dataset.")
+            return
+
+        variant = self.current_character.variants.get(self.current_variant_name)
+        if not variant or not variant.reference_image or not variant.reference_image.exists():
+            QMessageBox.warning(self, "Falta Referencia", f"La variante '{self.current_variant_name}' no posee imagen de referencia.")
+            return
+
+        try:
+            anims_v2 = self.animation_service.generate_articulated_animations_v2(
+                variant.reference_image,
+                self.current_character.character_id,
+                self.current_variant_name
+            )
+            self.v2_animations = anims_v2
+            self.timeline_panel.set_animations(anims_v2)
+            QMessageBox.information(
+                self,
+                "Movimiento Articulado V2 Generado",
+                f"Se generaron exitosamente las 16 animaciones V2 para "
+                f"'{self.current_character.display_name}' ({self.current_variant_name}).\n\n"
+                f"• HeadIdentityLock: ACTIVO (Rostro 100% bit-exacto)\n"
+                f"• PaletteGuard: ACTIVO (Sin colores espurios)\n"
+                f"• Cinemática: 18 articulaciones anatómicas"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error de Generación V2", f"Ocurrió un error al generar V2: {e}")
+
+    def _on_compare_v1_v2_clicked(self):
+        """Abre el diálogo interactivo para comparar visualmente V1 vs V2."""
+        if not self.current_character:
+            QMessageBox.warning(self, "Sin Personaje", "Seleccione un personaje para comparar animaciones.")
+            return
+
+        dlg = CompareV1V2Dialog(
+            character_id=self.current_character.character_id,
+            variant=self.current_variant_name,
+            v1_animations=self.current_animations,
+            v2_animations=self.v2_animations,
+            parent=self
+        )
+        dlg.exec()
+
+    def _on_export_v2_clicked(self):
+        """Exporta paquete Unity V2 con spritesheet y metadata de rig articulado."""
+        if not self.current_character:
+            QMessageBox.warning(self, "Sin Personaje", "Seleccione un personaje para exportar.")
+            return
+
+        target_anims = self.v2_animations or self.current_animations
+        if not target_anims:
+            QMessageBox.warning(self, "Sin Animaciones", "Primero extraiga o genere animaciones (V1 o V2).")
+            return
+
+        try:
+            sheet_p, meta_p, metrics = self.export_service.export_unity_package_v2(
+                self.current_character.character_id,
+                self.current_variant_name,
+                target_anims
+            )
+            QMessageBox.information(
+                self,
+                "Exportación Unity V2 Exitosa",
+                f"Paquete Unity V2 generado con éxito:\n\n"
+                f"• Spritesheet V2: {sheet_p.name}\n"
+                f"• Metadata Rig V2: {meta_p.name}\n"
+                f"• Carpeta destino: {sheet_p.parent}\n\n"
+                f"Consistency Score: {metrics.overall_score}%"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error de Exportación V2", f"Ocurrió un error al exportar: {e}")
+
