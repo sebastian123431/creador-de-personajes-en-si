@@ -1,17 +1,19 @@
 from pathlib import Path
-from typing import Optional
-from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QPainter, QPixmap, QColor, QPen, QWheelEvent
+from typing import Optional, Tuple
+from PySide6.QtCore import Qt, QRectF, QPointF
+from PySide6.QtGui import QPainter, QPixmap, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QComboBox, QPushButton, QSlider, QCheckBox, QScrollArea, QFrame
 )
 
+from models.skeleton import Skeleton, SKELETON_BONES
+
 
 class PixelArtCanvas(QWidget):
     """
     Lienzo de dibujo Pixel-Perfect con escalado Nearest-Neighbor estricto,
-    patrón de transparencia y cuadrícula de depuración.
+    patrón de transparencia, cuadrícula de depuración y overlay esquelético interactivo.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -20,6 +22,8 @@ class PixelArtCanvas(QWidget):
         self.show_grid: bool = False
         self.grid_cols: int = 4
         self.grid_rows: int = 16
+        self.show_skeleton: bool = False
+        self.skeleton: Optional[Skeleton] = None
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
 
@@ -29,6 +33,10 @@ class PixelArtCanvas(QWidget):
         else:
             self.pixmap = None
         self.update_canvas_size()
+        self.update()
+
+    def set_skeleton(self, skeleton: Optional[Skeleton]):
+        self.skeleton = skeleton
         self.update()
 
     def set_scale(self, scale: float):
@@ -42,6 +50,10 @@ class PixelArtCanvas(QWidget):
         self.grid_rows = rows
         self.update()
 
+    def set_show_skeleton(self, enabled: bool):
+        self.show_skeleton = enabled
+        self.update()
+
     def update_canvas_size(self):
         if self.pixmap and not self.pixmap.isNull():
             w = int(self.pixmap.width() * self.scale_factor)
@@ -52,7 +64,6 @@ class PixelArtCanvas(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        # Desactivar suavizado para Pixel Art absoluto
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
@@ -91,6 +102,38 @@ class PixelArtCanvas(QWidget):
                 y = int(r * row_h)
                 painter.drawLine(0, y, int(target_rect.width()), y)
 
+        # 4. Dibujar Skeleton Overlay (V2)
+        if self.show_skeleton and self.skeleton and self.skeleton.anchors:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            # Huesos
+            bone_pen = QPen(QColor(56, 189, 248, 200), 2, Qt.PenStyle.SolidLine)
+            painter.setPen(bone_pen)
+
+            for b_from, b_to in SKELETON_BONES:
+                a_from = self.skeleton.get_anchor(b_from)
+                a_to = self.skeleton.get_anchor(b_to)
+                if a_from and a_to:
+                    x1 = a_from.x * self.scale_factor + (self.scale_factor / 2.0)
+                    y1 = a_from.y * self.scale_factor + (self.scale_factor / 2.0)
+                    x2 = a_to.x * self.scale_factor + (self.scale_factor / 2.0)
+                    y2 = a_to.y * self.scale_factor + (self.scale_factor / 2.0)
+                    painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+
+            # Anchors
+            for name, a in self.skeleton.anchors.items():
+                px = a.x * self.scale_factor + (self.scale_factor / 2.0)
+                py = a.y * self.scale_factor + (self.scale_factor / 2.0)
+                rad = 4
+
+                if a.is_manual:
+                    painter.setBrush(QBrush(QColor(34, 197, 94)))
+                    painter.setPen(QPen(QColor(255, 255, 255), 1))
+                else:
+                    painter.setBrush(QBrush(QColor(234, 179, 8)))
+                    painter.setPen(QPen(QColor(255, 255, 255), 1))
+
+                painter.drawEllipse(QPointF(px, py), rad, rad)
+
 
 class PreviewPanel(QWidget):
     """
@@ -121,9 +164,9 @@ class PreviewPanel(QWidget):
 
         self.zoom_label = QLabel("Zoom: 200%")
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(1, 8)  # 1x a 8x
+        self.zoom_slider.setRange(1, 8)
         self.zoom_slider.setValue(2)
-        self.zoom_slider.setFixedWidth(120)
+        self.zoom_slider.setFixedWidth(100)
         self.zoom_slider.valueChanged.connect(self._on_zoom_changed)
 
         top_bar.addWidget(self.zoom_label)
@@ -131,9 +174,13 @@ class PreviewPanel(QWidget):
 
         top_bar.addSpacing(15)
 
-        self.grid_toggle = QCheckBox("Mostrar Grid (4x16)")
+        self.grid_toggle = QCheckBox("Grid (4x16)")
         self.grid_toggle.toggled.connect(self._on_grid_toggled)
         top_bar.addWidget(self.grid_toggle)
+
+        self.skeleton_toggle = QCheckBox("Show Skeleton")
+        self.skeleton_toggle.toggled.connect(self._on_skeleton_toggled)
+        top_bar.addWidget(self.skeleton_toggle)
 
         top_bar.addStretch()
 
@@ -186,3 +233,6 @@ class PreviewPanel(QWidget):
     def _on_grid_toggled(self, checked: bool):
         is_sheet = self.view_selector.currentIndex() == 1
         self.canvas.set_grid(checked and is_sheet)
+
+    def _on_skeleton_toggled(self, checked: bool):
+        self.canvas.set_show_skeleton(checked)

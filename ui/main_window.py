@@ -117,12 +117,17 @@ class MainWindow(QMainWindow):
         self.export_btn.setToolTip("Exportar spritesheet 4x16 (64 frames), frames individuales y metadata Unity")
         self.export_btn.clicked.connect(self._on_export_clicked)
 
+        self.edit_anchors_btn = QPushButton("🦴 EDIT ANCHORS")
+        self.edit_anchors_btn.setToolTip("Abrir editor interactivo de articulaciones manuales")
+        self.edit_anchors_btn.clicked.connect(self._on_edit_anchors_clicked)
+
         self.diff_btn = QPushButton("🔍 COMPARAR FRAMES (DIFF)")
         self.diff_btn.clicked.connect(self._on_compare_frames_clicked)
 
         pipeline_bar.addWidget(self.train_btn)
         pipeline_bar.addWidget(self.gen_btn)
         pipeline_bar.addWidget(self.export_btn)
+        pipeline_bar.addWidget(self.edit_anchors_btn)
         pipeline_bar.addWidget(self.diff_btn)
 
         bottom_layout.addLayout(pipeline_bar)
@@ -216,7 +221,66 @@ class MainWindow(QMainWindow):
                     self.preview_panel.canvas.set_image(temp_onion_path)
                     return
 
+            # Actualizar Skeleton para overlay si está activado
+            if not hasattr(self, "pose_analyzer_v2"):
+                from core.pose_analyzer_v2 import PoseAnalyzerV2
+                self.pose_analyzer_v2 = PoseAnalyzerV2()
+
+            skel = self.pose_analyzer_v2.analyze_pose(frame_obj.image_path)
+            self.preview_panel.canvas.set_skeleton(skel)
+
             self.preview_panel.canvas.set_image(frame_obj.image_path)
+
+    def _on_edit_anchors_clicked(self):
+        """Abre el editor manual interactivo de articulaciones."""
+        if not self.current_character:
+            QMessageBox.warning(self, "Selección requerida", "Seleccione un personaje para editar articulaciones.")
+            return
+
+        cur_frame = self.timeline_panel.get_current_frame()
+        img_path = cur_frame.image_path if cur_frame else None
+
+        if not img_path or not img_path.exists():
+            # Usar imagen de referencia si no hay frame de animación
+            variant = self.current_character.variants.get(self.current_variant_name)
+            if variant and variant.reference_image and variant.reference_image.exists():
+                img_path = variant.reference_image
+            else:
+                QMessageBox.warning(self, "Sin imagen", "No hay imagen disponible para editar articulaciones.")
+                return
+
+        from core.annotation_manager import AnnotationManager
+        from core.pose_analyzer_v2 import PoseAnalyzerV2
+        from ui.anchor_editor import AnchorEditorDialog
+
+        ann_mgr = AnnotationManager()
+        anim_name = self.timeline_panel.current_anim_name
+        frame_idx = self.timeline_panel.current_frame_idx + 1
+
+        # Cargar anotación existente o generar con V2
+        existing_skel = ann_mgr.load_annotation(
+            self.current_character.character_id,
+            self.current_variant_name,
+            anim_name,
+            frame_idx
+        )
+        if not existing_skel:
+            analyzer = PoseAnalyzerV2()
+            existing_skel = analyzer.analyze_pose(img_path)
+
+        dlg = AnchorEditorDialog(
+            image_path=img_path,
+            skeleton=existing_skel,
+            character_id=self.current_character.character_id,
+            variant=self.current_variant_name,
+            animation=anim_name,
+            frame_index=frame_idx,
+            annotation_manager=ann_mgr,
+            parent=self
+        )
+        if dlg.exec():
+            # Actualizar skeleton en el canvas
+            self.preview_panel.canvas.set_skeleton(dlg.canvas.skeleton)
 
     def _on_onion_skin_toggled(self, checked: bool):
         cur_frame = self.timeline_panel.get_current_frame()
