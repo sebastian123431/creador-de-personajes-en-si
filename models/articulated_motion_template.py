@@ -1,4 +1,6 @@
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from core.layer_resolver import LayerResolver
 
@@ -125,3 +127,21 @@ class ArticulatedMotionTemplate:
             status=data.get("status", "active"),
             frames=frames,
         )
+
+    def save(self, path: Path) -> Path:
+        """Guarda la plantilla en JSON."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+        return path
+
+    @classmethod
+    def load(cls, path: Path) -> "ArticulatedMotionTemplate":
+        """Carga una plantilla desde un archivo JSON."""
+        path = Path(path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Plantilla no encontrada: {path}")
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return cls.from_dict(data)

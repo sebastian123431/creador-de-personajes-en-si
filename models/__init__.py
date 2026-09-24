@@ -7,6 +7,8 @@ from models.motion_template import MotionTemplate, TemplateFrame
 from models.body_part import BodyPart
 from models.skeleton import Skeleton, Anchor, SKELETON_BONES, OFFICIAL_ANCHOR_NAMES
 from models.pose_frame import PoseFrame
+from models.dataset_split import DatasetSplit
+from models.validation_metrics import ValidationMetrics, ValidationResult
 
 __all__ = [
     "Frame",
@@ -22,4 +24,7 @@ __all__ = [
     "PoseFrame",
     "SKELETON_BONES",
     "OFFICIAL_ANCHOR_NAMES",
+    "DatasetSplit",
+    "ValidationMetrics",
+    "ValidationResult",
 ]

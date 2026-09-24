@@ -53,3 +53,9 @@ class SourceDatasetGuard:
                 f"El dataset original ('{self._protected_root}') es estrictamente READ-ONLY. "
                 f"Todos los archivos derivados deben escribirse fuera."
             )
+
+    def count_files(self) -> int:
+        """Retorna la cantidad total de archivos dentro del árbol protegido."""
+        if not self._protected_root or not self._protected_root.is_dir():
+            return 0
+        return sum(1 for p in self._protected_root.rglob("*") if p.is_file())
