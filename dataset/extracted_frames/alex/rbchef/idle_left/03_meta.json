@@ -1,9 +1,0 @@
-{
-    "character_id": "alex",
-    "variant": "rbchef",
-    "animation": "idle_left",
-    "frame": 3,
-    "source_character_folder": "C:/Users/seba5/AppData/Local/Temp/pytest-of-seba5/pytest-29/test_main_window_init0/dataset/finished_characters/approved/personajes al 100%/alex",
-    "source_spritesheet": "C:/Users/seba5/AppData/Local/Temp/pytest-of-seba5/pytest-29/test_main_window_init0/dataset/finished_characters/approved/personajes al 100%/alex/movimientos_rbchef.png",
-    "source_modified": false
-}
